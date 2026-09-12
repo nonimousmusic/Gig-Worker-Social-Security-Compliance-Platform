@@ -1,0 +1,328 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// -----------------------------------------------------------------------------
+// 1. ORGANIZATIONS & MULTI-TENANCY
+// -----------------------------------------------------------------------------
+
+enum OrganizationType {
+  AGGREGATOR
+  ADVISORY_PARTNER
+}
+
+enum AggregatorSector {
+  RIDE_HAILING
+  FOOD_DELIVERY
+  LOGISTICS_DELIVERY
+  MARKETPLACE_FREELANCE
+  HEALTHCARE_PERSONAL_SERVICES
+  OTHER
+}
+
+model Organization {
+  id                  String            @id @default(uuid())
+  name                String
+  type                OrganizationType  @default(AGGREGATOR)
+  sector              AggregatorSector?
+  cinOrRegistration   String?
+  gstin               String?
+  annualTurnover      Decimal?          @db.Decimal(14, 2)
+  annualWorkerPayouts Decimal?          @db.Decimal(14, 2)
+  isTrialAudit        Boolean           @default(false)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  users              User[]
+  workers            Worker[]
+  filings            FilingRecord[]
+  auditLogs          AuditLog[]
+  notificationLogs   NotificationLog[]
+
+  asClientAccesses   PartnerClientAccess[] @relation("ClientOrganization")
+  asPartnerAccesses  PartnerClientAccess[] @relation("PartnerOrganization")
+
+  @@index([type])
+  @@index([sector])
+}
+
+enum UserRole {
+  ORG_ADMIN
+  OPS_MANAGER
+  FINANCE_LEAD
+  EXTERNAL_ADVISOR
+}
+
+model User {
+  id              String        @id @default(uuid())
+  email           String        @unique
+  fullName        String
+  passwordHash    String
+  role            UserRole      @default(ORG_ADMIN)
+  organizationId  String
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  isEmailVerified Boolean       @default(false)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  auditActions    AuditLog[]
+
+  @@index([organizationId])
+  @@index([email])
+}
+
+enum PartnerAccessLevel {
+  AUDITOR_READ_ONLY
+  COMPLIANCE_MANAGER
+  FULL_ADMIN
+}
+
+model PartnerClientAccess {
+  id                    String             @id @default(uuid())
+  partnerOrganizationId String
+  clientOrganizationId  String
+  accessLevel           PartnerAccessLevel @default(AUDITOR_READ_ONLY)
+  grantedAt             DateTime           @default(now())
+  revokedAt             DateTime?
+
+  partnerOrganization   Organization       @relation("PartnerOrganization", fields: [partnerOrganizationId], references: [id], onDelete: Cascade)
+  clientOrganization    Organization       @relation("ClientOrganization", fields: [clientOrganizationId], references: [id], onDelete: Cascade)
+
+  @@unique([partnerOrganizationId, clientOrganizationId])
+  @@index([clientOrganizationId])
+}
+
+// -----------------------------------------------------------------------------
+// 2. WORKERS & ENGAGEMENT LEDGER
+// -----------------------------------------------------------------------------
+
+enum RegistrationStatus {
+  REGISTERED_ON_ESHRAM
+  PENDING_SUBMISSION
+  GAP_FLAGGED
+}
+
+enum EligibilityStatus {
+  NOT_YET_ELIGIBLE
+  APPROACHING_THRESHOLD
+  AT_RISK_CRITICAL
+  ELIGIBLE
+  ELIGIBLE_MULTI_AGGREGATOR
+}
+
+model Worker {
+  id                  String             @id @default(uuid())
+  organizationId      String
+  organization        Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  workerInternalCode  String
+  fullName            String
+  uan                 String?
+  maskedAadhaar       String?
+  phoneEncrypted      String?
+
+  registrationStatus  RegistrationStatus @default(PENDING_SUBMISSION)
+  eligibilityStatus   EligibilityStatus  @default(NOT_YET_ELIGIBLE)
+
+  onboardedDate       DateTime?
+  exitDate            DateTime?
+  isActive            Boolean            @default(true)
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  dailyEngagements     DailyEngagementLedger[]
+  annualAggregates     WorkerAnnualAggregate[]
+  externalDeclarations WorkerDeclaration[]
+
+  @@unique([organizationId, workerInternalCode])
+  @@index([organizationId, uan])
+  @@index([organizationId, eligibilityStatus])
+  @@index([organizationId, registrationStatus])
+}
+
+model DailyEngagementLedger {
+  id              String   @id @default(uuid())
+  workerId        String
+  worker          Worker   @relation(fields: [workerId], references: [id], onDelete: Cascade)
+
+  engagementDate  DateTime @db.Date
+  grossEarnings   Decimal  @db.Decimal(10, 2)
+  tripOrTaskId    String?
+  sourceBatchId   String?
+  createdAt       DateTime @default(now())
+
+  @@unique([workerId, engagementDate, tripOrTaskId])
+  @@index([workerId, engagementDate])
+}
+
+model WorkerAnnualAggregate {
+  id                   String   @id @default(uuid())
+  workerId             String
+  worker               Worker   @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  financialYear        String
+
+  internalDaysWorked   Int      @default(0)
+  declaredExternalDays Int      @default(0)
+  totalCumulativeDays  Int      @default(0)
+  totalGrossEarnings   Decimal  @default(0) @db.Decimal(12, 2)
+  isEligible           Boolean  @default(false)
+  lastCalculatedAt     DateTime @default(now())
+
+  @@unique([workerId, financialYear])
+  @@index([workerId, financialYear])
+}
+
+model WorkerDeclaration {
+  id                  String   @id @default(uuid())
+  workerId            String
+  worker              Worker   @relation(fields: [workerId], references: [id], onDelete: Cascade)
+  financialYear       String
+
+  externalAggregator  String?
+  declaredDaysCount   Int
+  declarationDocUrl   String?
+  declaredDate        DateTime @default(now())
+  verifiedByUserId    String?
+
+  @@index([workerId, financialYear])
+}
+
+// -----------------------------------------------------------------------------
+// 3. CONTRIBUTION RULES & FILING CALENDAR
+// -----------------------------------------------------------------------------
+
+model ContributionRateConfig {
+  id                     String           @id @default(uuid())
+  financialYear          String
+  sector                 AggregatorSector
+  ratePercentage         Decimal          @db.Decimal(5, 2)
+  maxWorkerPayoutPct     Decimal          @default(5.00) @db.Decimal(5, 2)
+  gazetteNotificationRef String?
+  effectiveFrom          DateTime
+  effectiveTo            DateTime?
+  isActive               Boolean          @default(true)
+
+  @@unique([financialYear, sector])
+  @@index([financialYear, sector])
+}
+
+enum FormType {
+  FORM_XX_PROVISIONAL
+  FORM_XXI_FINAL
+  FORM_XXII_REFUND
+}
+
+enum FilingStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  PRE_FILING_GENERATED
+  CHALLAN_DEPOSITED
+  FILED_LOCKED
+  OVERDUE
+}
+
+model FilingRecord {
+  id                     String       @id @default(uuid())
+  organizationId         String
+  organization           Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  financialYear          String
+  formType               FormType
+  dueDate                DateTime
+  status                 FilingStatus @default(NOT_STARTED)
+
+  reportedTurnover       Decimal      @db.Decimal(14, 2)
+  reportedWorkerPayouts  Decimal      @db.Decimal(14, 2)
+  appliedRatePct         Decimal      @db.Decimal(5, 2)
+
+  assessedContribution   Decimal      @db.Decimal(14, 2)
+  statutoryCeilingAmount Decimal      @db.Decimal(14, 2)
+  finalLiabilityAmount   Decimal      @db.Decimal(14, 2)
+
+  provisionalAdjusted    Decimal      @default(0) @db.Decimal(14, 2)
+  balancePayable         Decimal      @default(0) @db.Decimal(14, 2)
+  accruedInterestPenalty Decimal      @default(0) @db.Decimal(14, 2)
+
+  generatedFormPdfUrl    String?
+  lockedHashSha256       String?
+  filedAt                DateTime?
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+
+  challans               FilingChallan[]
+
+  @@unique([organizationId, financialYear, formType])
+  @@index([organizationId, financialYear])
+  @@index([status, dueDate])
+}
+
+model FilingChallan {
+  id                String       @id @default(uuid())
+  filingRecordId    String
+  filingRecord      FilingRecord @relation(fields: [filingRecordId], references: [id], onDelete: Cascade)
+
+  cin               String
+  bsrCode           String
+  bankName          String
+  depositDate       DateTime
+  amountDeposited   Decimal      @db.Decimal(14, 2)
+  challanReceiptUrl String
+  verifiedBy        String?
+  createdAt         DateTime     @default(now())
+
+  @@index([filingRecordId])
+  @@index([cin])
+}
+
+// -----------------------------------------------------------------------------
+// 4. ALERTS, CRON AUDIT & SYSTEM LOGS
+// -----------------------------------------------------------------------------
+
+enum NotificationType {
+  DEADLINE_REMINDER_60D
+  DEADLINE_REMINDER_30D
+  DEADLINE_REMINDER_15D
+  DEADLINE_REMINDER_7D
+  DEADLINE_REMINDER_1D
+  PENALTY_ACCRUAL_WARNING
+  WORKER_THRESHOLD_MILESTONE
+  REGISTRATION_GAP_ALERT
+}
+
+model NotificationLog {
+  id              String           @id @default(uuid())
+  organizationId  String
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  recipientEmail  String
+  type            NotificationType
+  subject         String
+  contentSummary  String
+  sentAt          DateTime         @default(now())
+  deliveryStatus  String           @default("SENT")
+
+  @@index([organizationId, sentAt])
+}
+
+model AuditLog {
+  id              String        @id @default(uuid())
+  organizationId  String
+  organization    Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId          String?
+  user            User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  action          String
+  entityType      String
+  entityId        String?
+  detailsJson     Json?
+  ipAddress       String?
+  userAgent       String?
+  createdAt       DateTime      @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([action])
+}
