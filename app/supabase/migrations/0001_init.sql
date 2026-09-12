@@ -33,67 +33,12 @@ CREATE TYPE public.notification_type AS ENUM (
 );
 
 -- ═════════════════════════════════════════════════════════════════════════════
--- 2. RLS HELPER FUNCTIONS
+-- 2. TRIGGER HELPER (table-independent — safe to define before TABLES)
+
+-- RLS helper functions (current_org_id, current_profile_id,
+-- current_user_role, can_access_org) are defined after the TABLES section:
+-- LANGUAGE sql bodies are validated at CREATE time, so the tables must exist.
 -- ═════════════════════════════════════════════════════════════════════════════
-
--- Organization of the currently authenticated user.
-CREATE OR REPLACE FUNCTION public.current_org_id()
-RETURNS uuid
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-  SELECT organization_id FROM public.profiles WHERE id = auth.uid() LIMIT 1;
-$$;
-
--- Profile id (== auth.users.id) of the current user.
-CREATE OR REPLACE FUNCTION public.current_profile_id()
-RETURNS uuid
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-  SELECT id FROM public.profiles WHERE id = auth.uid() LIMIT 1;
-$$;
-
--- Role of the current user.
-CREATE OR REPLACE FUNCTION public.current_user_role()
-RETURNS public.user_role
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-  SELECT role FROM public.profiles WHERE id = auth.uid() LIMIT 1;
-$$;
-
--- Whether the current user may access a given organization:
--- own organization, or an active partner grant for that organization.
-CREATE OR REPLACE FUNCTION public.can_access_org(target_org uuid)
-RETURNS boolean
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-  SELECT EXISTS (
-    SELECT 1
-    FROM public.profiles p
-    WHERE p.id = auth.uid()
-      AND (
-        p.organization_id = target_org
-        OR EXISTS (
-          SELECT 1
-          FROM public.partner_client_access pca
-          WHERE pca.partner_organization_id = p.organization_id
-            AND pca.client_organization_id = target_org
-            AND pca.revoked_at IS NULL
-        )
-      )
-  );
-$$;
 
 -- updated_at maintenance trigger
 CREATE OR REPLACE FUNCTION public.touch_updated_at()
@@ -331,6 +276,68 @@ CREATE TRIGGER touch_filing_records_updated BEFORE UPDATE ON public.filing_recor
 -- ═════════════════════════════════════════════════════════════════════════════
 -- 4. ROW LEVEL SECURITY
 -- ═════════════════════════════════════════════════════════════════════════════
+
+-- 3b. RLS HELPER FUNCTIONS (after TABLES — LANGUAGE sql bodies are
+-- validated at CREATE time, so profiles / partner_client_access must exist).
+
+-- Organization of the currently authenticated user.
+CREATE OR REPLACE FUNCTION public.current_org_id()
+RETURNS uuid
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT organization_id FROM public.profiles WHERE id = auth.uid() LIMIT 1;
+$$;
+
+-- Profile id (== auth.users.id) of the current user.
+CREATE OR REPLACE FUNCTION public.current_profile_id()
+RETURNS uuid
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT id FROM public.profiles WHERE id = auth.uid() LIMIT 1;
+$$;
+
+-- Role of the current user.
+CREATE OR REPLACE FUNCTION public.current_user_role()
+RETURNS public.user_role
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT role FROM public.profiles WHERE id = auth.uid() LIMIT 1;
+$$;
+
+-- Whether the current user may access a given organization:
+-- own organization, or an active partner grant for that organization.
+CREATE OR REPLACE FUNCTION public.can_access_org(target_org uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    WHERE p.id = auth.uid()
+      AND (
+        p.organization_id = target_org
+        OR EXISTS (
+          SELECT 1
+          FROM public.partner_client_access pca
+          WHERE pca.partner_organization_id = p.organization_id
+            AND pca.client_organization_id = target_org
+            AND pca.revoked_at IS NULL
+        )
+      )
+  );
+$$;
 
 ALTER TABLE public.organizations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;

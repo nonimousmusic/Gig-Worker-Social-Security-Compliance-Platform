@@ -82,7 +82,7 @@ JOIN LATERAL generate_series(
   CURRENT_DATE,
   '1 day'::interval
 ) AS d ON true
-JOIN public.workers w ON w.id = wrk.id
+JOIN public.workers w ON w.id = wrk.id::uuid
 CROSS JOIN LATERAL (
   SELECT row_number() OVER () AS rnum
 ) AS rn
