@@ -1,27 +1,38 @@
-import { NextRequest, NextResponse } from "next/server";
-import { verifyToken } from "@/lib/auth";
-import { dataStore } from "@/lib/data-store";
+import { NextResponse } from "next/server";
+import { getSessionData } from "@/lib/session";
 
-export async function GET(req: NextRequest) {
-  const token =
-    req.cookies.get("accessToken")?.value ||
-    req.headers.get("authorization")?.replace("Bearer ", "");
+export async function GET() {
+  const session = await getSessionData();
 
-  const payload = token ? verifyToken(token) : null;
-  const org = dataStore.getOrganization();
+  if (!session) {
+    return NextResponse.json(
+      { success: false, error: { code: "UNAUTHORIZED", message: "Not authenticated" } },
+      { status: 401 }
+    );
+  }
 
-  // If unauthenticated, return default active compliance session for seamless demo access
+  const org = session.organization;
+
   return NextResponse.json({
     success: true,
     data: {
       user: {
-        id: payload?.userId || "usr-admin-1",
-        email: payload?.email || "compliance@quickmove.in",
-        fullName: "Arjun Verma (Compliance Officer)",
-        role: payload?.role || "ADMIN",
+        id: session.userId,
+        email: session.email,
+        fullName: session.fullName,
+        role: session.role,
         organizationId: org.id,
       },
-      organization: org,
+      organization: {
+        id: org.id,
+        legalName: org.name,
+        cin: org.cin_or_registration,
+        gstin: org.gstin,
+        sector: org.sector,
+        annualTurnover: org.annual_turnover,
+        annualWorkerPayouts: org.annual_worker_payouts,
+        isTrialAudit: org.is_trial_audit,
+      },
     },
   });
 }

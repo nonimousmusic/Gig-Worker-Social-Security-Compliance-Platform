@@ -48,11 +48,3 @@ export function calculatePenalty(
     legalReference: "Section 133 / Rule 49, Social Security (Central) Rules, 2026",
   };
 }
-
-export function formatPenaltyWarning(penalty: PenaltyCalcResult): string {
-  if (penalty.daysOverdue <= 0) return "";
-  return `⚠️ OVERDUE by ${penalty.daysOverdue} days (${penalty.monthsOverdue} month(s)). ` +
-    `Accrued interest: ₹${penalty.penaltyAmount.toLocaleString("en-IN")} ` +
-    `(${penalty.interestRate}% per month on ₹${penalty.balancePayable.toLocaleString("en-IN")}). ` +
-    `${penalty.legalReference}`;
-}

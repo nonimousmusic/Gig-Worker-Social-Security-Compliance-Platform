@@ -4,18 +4,15 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   FileText,
-  Calendar,
   CheckCircle2,
   AlertTriangle,
   Clock,
   ArrowRight,
   Shield,
-  Download,
   Plus,
   Percent,
-  TrendingUp,
 } from "lucide-react";
-import { FilingItem } from "@/lib/data-store";
+import { FilingItem } from "@/lib/types";
 
 export default function StatutoryFilingsPage() {
   const [filings, setFilings] = useState<FilingItem[]>([]);
@@ -37,28 +34,103 @@ export default function StatutoryFilingsPage() {
 
   const [wizardSubmitting, setWizardSubmitting] = useState(false);
 
-  async function loadFilings() {
+  // Deadline banner is driven by the loaded filings, never hardcoded.
+  // The day-count is computed inside the load effect (impure date math
+  // is not allowed during render).
+  const [banner, setBanner] = useState<{
+    openCount: number;
+    nextLabel: string;
+    nextDue: string;
+    nextDays: number | null;
+    paidCount: number;
+    paidTotal: number;
+  }>({
+    openCount: 0,
+    nextLabel: "No open filings",
+    nextDue: "—",
+    nextDays: null,
+    paidCount: 0,
+    paidTotal: 0,
+  });
+
+  function computeBanner(rows: FilingItem[]) {
+    const open = rows.filter((f) => f.status !== "PAID" && f.dueDate);
+    const next = [...open].sort((a, b) => (a.dueDate < b.dueDate ? -1 : 1))[0];
+    const paid = rows.filter((f) => f.status === "PAID");
+    setBanner({
+      openCount: open.length,
+      nextLabel: next
+        ? `${next.filingType === "FORM_XXI_ANNUAL" ? "Form-XXI" : "Form-XX"}: ${next.quarter ? `${next.quarter} ` : ""}Return`
+        : "No open filings",
+      nextDue: next?.dueDate || "—",
+      nextDays: next?.dueDate
+        ? Math.max(0, Math.ceil((new Date(`${next.dueDate}T23:59:59Z`).getTime() - Date.now()) / 86400000))
+        : null,
+      paidCount: paid.length,
+      paidTotal: paid.reduce((s, f) => s + f.finalCessPayable, 0),
+    });
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/v1/filings");
+        const json = await res.json();
+        if (!cancelled && json.success) {
+          setFilings(json.data.filings);
+          computeBanner(json.data.filings);
+        }
+      } catch (err) {
+        console.error("Filings load failed:", err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function reloadFilings() {
     try {
       const res = await fetch("/api/v1/filings");
       const json = await res.json();
       if (json.success) {
         setFilings(json.data.filings);
+        computeBanner(json.data.filings);
       }
-    } catch {
-      // Fallback
-    } finally {
-      setLoading(false);
+    } catch (err) {
+      console.error("Filings reload failed:", err);
     }
   }
-
-  useEffect(() => {
-    loadFilings();
-  }, []);
 
   const turnoverCess = formData.turnoverAmount * (formData.ratePercent / 100);
   const payoutCap = formData.payoutAmount * 0.05;
   const finalCess = Math.min(turnoverCess, payoutCap);
   const isCapped = payoutCap < turnoverCess;
+
+  // Display due date for the selected quarter (mirrors the API mapping).
+  // Years live in state because derivation runs in the FY select handler.
+  const [wizardYears, setWizardYears] = useState({ start: "2025", end: "2026" });
+  const quarterOptions = [
+    { value: "Q1", label: `Q1 (April–June ${wizardYears.start}) — Due Jul 31` },
+    { value: "Q2", label: `Q2 (July–September ${wizardYears.start}) — Due Oct 31` },
+    { value: "Q3", label: `Q3 (October–December ${wizardYears.start}) — Due Jan 31` },
+    { value: "Q4", label: `Q4 (January–March ${wizardYears.end}) — Due Apr 30` },
+  ];
+  const wizardDueLabel = (() => {
+    switch (formData.quarter) {
+      case "Q1":
+        return `July 31, ${wizardYears.start}`;
+      case "Q2":
+        return `October 31, ${wizardYears.start}`;
+      case "Q3":
+        return `January 31, ${wizardYears.end}`;
+      default:
+        return `April 30, ${wizardYears.end}`;
+    }
+  })();
 
   async function handleCreateFiling() {
     setWizardSubmitting(true);
@@ -72,10 +144,10 @@ export default function StatutoryFilingsPage() {
       if (json.success) {
         setIsWizardOpen(false);
         setWizardStep(1);
-        loadFilings();
+        reloadFilings();
       }
-    } catch {
-      // error
+    } catch (err) {
+      console.error("Create filing request failed:", err);
     } finally {
       setWizardSubmitting(false);
     }
@@ -107,7 +179,7 @@ export default function StatutoryFilingsPage() {
         </button>
       </div>
 
-      {/* Deadlines Banner */}
+      {/* Deadlines Banner (live filing data) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-[#111622] p-5 rounded-xl border border-amber-500/30 space-y-2">
           <div className="flex items-center justify-between">
@@ -116,29 +188,29 @@ export default function StatutoryFilingsPage() {
               Active Deadline
             </span>
             <span className="text-[10px] px-2 py-0.5 rounded bg-amber-500/20 text-amber-300 font-mono">
-              49 DAYS
+              {banner.nextDays ?? "—"} DAYS
             </span>
           </div>
-          <p className="text-base font-bold text-white">Form-XX: Q2 Return</p>
-          <p className="text-xs text-slate-400">Due: October 31, 2025 &bull; Period: July–Sept 2025</p>
+          <p className="text-base font-bold text-white">{banner.nextLabel}</p>
+          <p className="text-xs text-slate-400">Due: {banner.nextDue}</p>
         </div>
 
         <div className="bg-[#111622] p-5 rounded-xl border border-slate-800 space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-400">Upcoming Q3</span>
-            <span className="text-[10px] text-slate-500 font-mono">Jan 31, 2026</span>
+            <span className="text-xs font-semibold text-slate-400">Open Filings</span>
+            <span className="text-[10px] text-slate-500 font-mono">{banner.openCount} pending</span>
           </div>
-          <p className="text-base font-bold text-white">Form-XX: Q3 Return</p>
-          <p className="text-xs text-slate-400">Period: Oct–Dec 2025 &bull; Estimated: ₹6.1L</p>
+          <p className="text-base font-bold text-white">Awaiting Payment</p>
+          <p className="text-xs text-slate-400">Deposit challans from the Challan Vault</p>
         </div>
 
         <div className="bg-[#111622] p-5 rounded-xl border border-slate-800 space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-400">Annual Return</span>
-            <span className="text-[10px] text-slate-500 font-mono">June 30, 2026</span>
+            <span className="text-xs font-semibold text-slate-400">Completed Returns</span>
+            <span className="text-[10px] text-slate-500 font-mono">{banner.paidCount} paid</span>
           </div>
-          <p className="text-base font-bold text-white">Form-XXI: FY 2025-26</p>
-          <p className="text-xs text-slate-400">Annual Reconciliation & Audit Certification</p>
+          <p className="text-base font-bold text-white">₹{banner.paidTotal.toLocaleString("en-IN")} locked</p>
+          <p className="text-xs text-slate-400">Cess deposited & audit-locked</p>
         </div>
       </div>
 
@@ -203,6 +275,14 @@ export default function StatutoryFilingsPage() {
                       {f.status === "PAID" ? (
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
                           <CheckCircle2 className="w-3 h-3" /> PAID
+                        </span>
+                      ) : f.status === "OVERDUE" ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-rose-500/15 text-rose-300 border border-rose-500/30">
+                          <AlertTriangle className="w-3 h-3" /> OVERDUE
+                        </span>
+                      ) : f.status === "SUBMITTED" ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/15 text-blue-300 border border-blue-500/30">
+                          <Clock className="w-3 h-3" /> SUBMITTED
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30">
@@ -286,7 +366,15 @@ export default function StatutoryFilingsPage() {
                     <label className="block text-slate-300 mb-1">Financial Year</label>
                     <select
                       value={formData.financialYear}
-                      onChange={(e) => setFormData({ ...formData, financialYear: e.target.value })}
+                      onChange={(e) => {
+                        const fy = e.target.value;
+                        const sep = fy.indexOf("-");
+                        setFormData({ ...formData, financialYear: fy });
+                        setWizardYears({
+                          start: sep > 0 ? fy.slice(0, sep) : "",
+                          end: sep > 0 ? fy.slice(sep + 1) : "",
+                        });
+                      }}
                       className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white"
                     >
                       <option value="2025-2026">FY 2025-2026</option>
@@ -300,9 +388,11 @@ export default function StatutoryFilingsPage() {
                       onChange={(e) => setFormData({ ...formData, quarter: e.target.value })}
                       className="w-full bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-white"
                     >
-                      <option value="Q2">Q2 (July–September 2025) — Due Oct 31</option>
-                      <option value="Q3">Q3 (October–December 2025) — Due Jan 31</option>
-                      <option value="Q4">Q4 (January–March 2026) — Due Apr 30</option>
+                      {quarterOptions.map((q) => (
+                        <option key={q.value} value={q.value}>
+                          {q.label}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -345,7 +435,7 @@ export default function StatutoryFilingsPage() {
                   </h4>
                   <div className="grid grid-cols-2 gap-4 pt-1">
                     <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
-                      <span className="text-slate-400 block text-[11px]">1.5% of Turnover</span>
+                      <span className="text-slate-400 block text-[11px]">{formData.ratePercent}% of Turnover</span>
                       <strong className="text-white text-base font-mono">₹{turnoverCess.toLocaleString("en-IN")}</strong>
                     </div>
                     <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
@@ -377,17 +467,20 @@ export default function StatutoryFilingsPage() {
                   <div className="grid grid-cols-2 gap-4">
                     <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
                       <span className="text-slate-400 text-[11px]">Eligible Gig Workers Linked</span>
-                      <strong className="text-emerald-400 text-lg block font-mono">1,410 Workers</strong>
+                      <strong className="text-emerald-400 text-lg block font-mono">
+                        {formData.eligibleWorkerCount.toLocaleString("en-IN")} Workers
+                      </strong>
                     </div>
                     <div className="p-3 bg-slate-950 rounded-lg border border-slate-800">
                       <span className="text-slate-400 text-[11px]">Aadhaar Masking Pipeline</span>
                       <strong className="text-white text-lg block flex items-center gap-1 font-mono">
-                        <Shield className="w-4 h-4 text-emerald-400" /> 100% UIDAI Masked
+                        <Shield className="w-4 h-4 text-emerald-400" /> Masked at ingestion
                       </strong>
                     </div>
                   </div>
                   <p className="text-[11px] text-slate-400 leading-relaxed">
-                    All 1,410 workers have logged &gt;= 90 days in the rolling 12-month period or &gt;= 120 cumulative days in the FY as certified in the platform engagement ledger.
+                    {formData.eligibleWorkerCount.toLocaleString("en-IN")} of {formData.totalWorkerCount.toLocaleString("en-IN")} linked
+                    workers are counted toward Section 114 coverage from the platform engagement ledger.
                   </p>
                 </div>
               </div>
@@ -401,11 +494,11 @@ export default function StatutoryFilingsPage() {
                     <CheckCircle2 className="w-4 h-4 text-emerald-400" /> Summary for Submission
                   </h4>
                   <div className="space-y-1 text-slate-300 text-xs">
-                    <p>Filing: <strong className="text-white">Form-XX (Quarterly Return) &bull; Q2 FY 2025-26</strong></p>
+                    <p>Filing: <strong className="text-white">Form-XX (Quarterly Return) &bull; {formData.quarter} FY {formData.financialYear}</strong></p>
                     <p>Turnover Declared: <strong className="text-white">₹{(formData.turnoverAmount / 10000000).toFixed(2)} Cr</strong></p>
                     <p>Payout Declared: <strong className="text-white">₹{(formData.payoutAmount / 10000000).toFixed(2)} Cr</strong></p>
                     <p>Statutory Cess Amount: <strong className="text-emerald-400 font-mono text-base font-bold">₹{finalCess.toLocaleString("en-IN")}</strong></p>
-                    <p>Due Date: <strong className="text-amber-300">October 31, 2025</strong></p>
+                    <p>Due Date: <strong className="text-amber-300">{wizardDueLabel}</strong></p>
                   </div>
                 </div>
 

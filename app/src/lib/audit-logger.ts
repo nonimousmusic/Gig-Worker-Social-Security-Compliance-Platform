@@ -1,5 +1,11 @@
-export interface AuditLogEntry {
-  id?: string;
+/**
+ * Audit logging backed by the Supabase `audit_logs` table.
+ * Rows are scoped to the current user's organization via RLS.
+ */
+import { getSessionData } from "@/lib/session";
+import { createClient } from "@/lib/supabase/server";
+
+export interface AuditLogEntryInput {
   actorId?: string;
   actorEmail?: string;
   actorRole?: string;
@@ -9,64 +15,82 @@ export interface AuditLogEntry {
   ipAddress?: string;
   userAgent?: string;
   metadata?: Record<string, unknown>;
-  createdAt?: string;
 }
 
-const memoryLogs: AuditLogEntry[] = [
-  {
-    id: "log-1",
-    actorId: "usr-admin-1",
-    actorEmail: "compliance@quickmove.in",
-    actorRole: "ADMIN",
-    action: "CHALLAN_UPLOADED",
-    entity: "FilingRecord",
-    entityId: "filing-q1-2025",
-    ipAddress: "49.36.128.45",
-    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    metadata: { challanNumber: "CHL-2025-Q1-09823", amount: 485000 },
-    createdAt: new Date(Date.now() - 3600000 * 24 * 3).toISOString(),
-  },
-  {
-    id: "log-2",
-    actorId: "usr-admin-1",
-    actorEmail: "compliance@quickmove.in",
-    actorRole: "ADMIN",
-    action: "CSV_INGESTION_COMPLETED",
-    entity: "EngagementLedger",
-    entityId: "batch-2025-09",
-    ipAddress: "49.36.128.45",
-    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-    metadata: { totalRows: 1420, validRows: 1418, errors: 2 },
-    createdAt: new Date(Date.now() - 3600000 * 24 * 7).toISOString(),
-  },
-  {
-    id: "log-3",
-    actorId: "usr-system",
-    actorEmail: "system@gigcesshq.internal",
-    actorRole: "SYSTEM",
-    action: "ELIGIBILITY_EVALUATION_RUN",
-    entity: "Worker",
-    entityId: "all-active",
-    ipAddress: "127.0.0.1",
-    userAgent: "GigCess-Cron/1.0",
-    metadata: { evaluatedWorkers: 1250, newlyEligible: 34 },
-    createdAt: new Date(Date.now() - 3600000 * 12).toISOString(),
-  },
-];
+export interface AuditLogEntry {
+  id: string;
+  organizationId: string;
+  actorEmail?: string;
+  action: string;
+  entityType: string;
+  entityId?: string;
+  metadata?: Record<string, unknown>;
+  ipAddress?: string;
+  userAgent?: string;
+  createdAt: string;
+}
 
-export async function logAuditEvent(entry: AuditLogEntry): Promise<AuditLogEntry> {
-  const newEntry: AuditLogEntry = {
-    ...entry,
-    id: `log-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
-    createdAt: new Date().toISOString(),
-  };
-  memoryLogs.unshift(newEntry);
-  if (memoryLogs.length > 500) {
-    memoryLogs.pop();
+export async function logAuditEvent(entry: AuditLogEntryInput): Promise<AuditLogEntry | null> {
+  const session = await getSessionData();
+  if (!session) return null;
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("audit_logs")
+    .insert({
+      organization_id: session.organization.id,
+      profile_id: session.profile.id,
+      actor_email: entry.actorEmail ?? session.email,
+      action: entry.action,
+      entity_type: entry.entity,
+      entity_id: entry.entityId ?? null,
+      details_json: entry.metadata ?? null,
+      ip_address: entry.ipAddress ?? null,
+      user_agent: entry.userAgent ?? null,
+    })
+    .select()
+    .single();
+
+  if (error || !data) {
+    // Audit trail must be append-only AND reliable: log loudly so holes get noticed.
+    console.error("audit-log insert failed:", error?.message || "no row returned", { action: entry.action });
+    return null;
   }
-  return newEntry;
+
+  return {
+    id: data.id,
+    organizationId: data.organization_id,
+    actorEmail: data.actor_email,
+    action: data.action,
+    entityType: data.entity_type,
+    entityId: data.entity_id,
+    metadata: data.details_json,
+    ipAddress: data.ip_address,
+    userAgent: data.user_agent,
+    createdAt: data.created_at,
+  };
 }
 
-export function getAuditLogs(limit: number = 50): AuditLogEntry[] {
-  return memoryLogs.slice(0, limit);
+export async function getAuditLogs(limit: number = 50): Promise<AuditLogEntry[]> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("audit_logs")
+    .select("*")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (!data) return [];
+
+  return data.map((row) => ({
+    id: row.id,
+    organizationId: row.organization_id,
+    actorEmail: row.actor_email,
+    action: row.action,
+    entityType: row.entity_type,
+    entityId: row.entity_id,
+    metadata: row.details_json,
+    ipAddress: row.ip_address,
+    userAgent: row.user_agent,
+    createdAt: row.created_at,
+  }));
 }

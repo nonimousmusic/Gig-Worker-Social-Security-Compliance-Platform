@@ -1,9 +1,12 @@
 "use client";
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Shield, ArrowRight, Eye, EyeOff, Loader2 } from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
 
 export default function LoginPage() {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -16,21 +19,19 @@ export default function LoginPage() {
     setError("");
 
     try {
-      const res = await fetch("/api/v1/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+      const supabase = createClient();
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim().toLowerCase(),
+        password,
       });
-      const data = await res.json();
-      if (!data.success) {
-        setError(data.error?.message || "Login failed");
+      if (error) {
+        setError("Invalid email or password");
         setLoading(false);
         return;
       }
-      // Store token and redirect
-      document.cookie = `accessToken=${data.data.accessToken}; path=/; max-age=3600; SameSite=Strict`;
-      window.location.href = "/dashboard";
-    } catch {
+      router.push("/dashboard");
+    } catch (err) {
+      console.error("Sign-in request failed:", err);
       setError("Something went wrong. Please try again.");
       setLoading(false);
     }
@@ -76,9 +77,6 @@ export default function LoginPage() {
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label htmlFor="login-password" className="label !mb-0">Password</label>
-              <Link href="/forgot-password" className="text-xs text-primary-400 hover:text-primary-300 transition-colors">
-                Forgot password?
-              </Link>
             </div>
             <div className="relative">
               <input

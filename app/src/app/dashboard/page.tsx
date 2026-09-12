@@ -4,7 +4,6 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   Users,
-  AlertTriangle,
   TrendingUp,
   FileText,
   UploadCloud,
@@ -12,7 +11,6 @@ import {
   Clock,
   ArrowUpRight,
   ShieldCheck,
-  Building2,
   Calendar,
   Percent,
 } from "lucide-react";
@@ -36,13 +34,22 @@ export default function DashboardOverviewPage() {
       totalCessPaidYTD: number;
     };
     statutoryDeadline: {
-      filingName: string;
-      quarter: string;
-      dueDate: string;
-      daysRemaining: number;
+      filingName: string | null;
+      quarter: string | null;
+      dueDate: string | null;
+      daysRemaining: number | null;
       status: string;
       penaltyRiskRate: string;
     };
+    recentFilings: {
+      id: string;
+      filingType: string;
+      quarter?: string;
+      financialYear: string;
+      status: string;
+      dueDate: string;
+      finalCessPayable: number;
+    }[];
     complianceScore: number;
     riskLevel: string;
   } | null>(null);
@@ -57,8 +64,8 @@ export default function DashboardOverviewPage() {
         if (json.success) {
           setData(json.data);
         }
-      } catch {
-        // Handled gracefully with fallback
+      } catch (err) {
+        console.error("Dashboard overview load failed:", err);
       } finally {
         setLoading(false);
       }
@@ -297,35 +304,43 @@ export default function DashboardOverviewPage() {
           {/* Active Countdown */}
           <div className="p-4 rounded-xl bg-gradient-to-br from-amber-950/30 via-slate-900 to-slate-900 border border-amber-500/30 space-y-2">
             <div className="flex items-center justify-between text-xs">
-              <span className="font-semibold text-amber-300">Form-XX (Q2 Return)</span>
+              <span className="font-semibold text-amber-300">
+                {data.statutoryDeadline.filingName || "No open filings"}
+                {data.statutoryDeadline.quarter ? ` — ${data.statutoryDeadline.quarter}` : ""}
+              </span>
               <span className="px-2 py-0.5 bg-amber-500/20 text-amber-300 rounded font-mono text-[10px]">
-                {data.statutoryDeadline.daysRemaining} DAYS LEFT
+                {data.statutoryDeadline.daysRemaining ?? "—"} DAYS LEFT
               </span>
             </div>
             <p className="text-xs text-slate-300">
-              Due on <strong className="text-white">{data.statutoryDeadline.dueDate}</strong>
+              Due on <strong className="text-white">{data.statutoryDeadline.dueDate || "—"}</strong>
+              {data.statutoryDeadline.status === "OVERDUE" && (
+                <span className="ml-2 text-rose-400 font-bold">OVERDUE</span>
+              )}
             </p>
             <p className="text-[11px] text-amber-400/90 leading-relaxed">
               Delay triggers interest of 1% per month under Section 133 + statutory damages.
             </p>
           </div>
 
-          {/* Subsequent Deadlines */}
+          {/* Recent filings from the ledger */}
           <div className="space-y-2 text-xs">
-            <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-slate-800/80">
-              <div>
-                <p className="font-medium text-slate-300">Form-XX (Q3 Return)</p>
-                <p className="text-[11px] text-slate-500">Period: Oct–Dec 2025</p>
+            {data.recentFilings.length === 0 && (
+              <p className="text-slate-500 text-[11px]">No filings recorded yet.</p>
+            )}
+            {data.recentFilings.map((f) => (
+              <div key={f.id} className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-slate-800/80">
+                <div>
+                  <p className="font-medium text-slate-300">
+                    {f.filingType === "FORM_XXI_ANNUAL" ? "Form-XXI (Annual)" : `Form-XX (${f.quarter || "—"})`} · FY {f.financialYear}
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    ₹{f.finalCessPayable.toLocaleString("en-IN")} · Due {f.dueDate}
+                  </p>
+                </div>
+                <span className="text-slate-400 font-mono text-[11px]">{f.status}</span>
               </div>
-              <span className="text-slate-400 font-mono text-[11px]">Jan 31, 2026</span>
-            </div>
-            <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-900/60 border border-slate-800/80">
-              <div>
-                <p className="font-medium text-slate-300">Form-XXI (Annual Return)</p>
-                <p className="text-[11px] text-slate-500">Full FY 2025-26 Reconciliation</p>
-              </div>
-              <span className="text-slate-400 font-mono text-[11px]">June 30, 2026</span>
-            </div>
+            ))}
           </div>
         </div>
       </div>

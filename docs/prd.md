@@ -3,7 +3,7 @@
 
 | | |
 |---|---|
-| **Status** | Draft v1.0 |
+| **Status** | v2.0 — as-built corrections (see §6–§9) |
 | **Date** | 3 September 2026 |
 | **Owner** | [Founder/PM name] |
 | **Reviewers** | [Eng lead / Design lead] |
@@ -60,18 +60,18 @@ One important nuance the product must be built around: the **exact contribution 
 ## 6. User stories (prioritized)
 
 **P0 — must have for MVP:**
-1. As an ops lead, I can create an account (with work email verification) and upload or connect my gig-worker roster using either a daily activity ledger (for audit-proof tracking) or a historical summary backfill (CSV/XLSX).
-2. As an ops lead, I can see, for each worker, their cumulative days-engaged count for the current financial year, correctly applying the 90-day single-aggregator threshold, and recording any worker-declared cross-platform days (clearly labeled as 'Self-Reported') for the 120-day multi-aggregator threshold.
-3. As an ops lead, I can see which of my workers have registered e-Shram Universal Account Numbers (UAN) versus those with missing or pending registrations, with strict Aadhaar masking to the last 4 digits (DPDP Act compliant).
-4. As an ops lead, I receive proactive alerts via daily automated sweeps with countdowns as the 30 June (provisional Form-XX) and 31 October (final return Form-XXI) deadlines approach, including calculated 1% monthly interest penalty forecasts if deadlines are missed.
-5. As an ops lead, I can use a step-by-step filing wizard to generate pre-filled official Ministry Form-XX / Form-XXI PDFs, upload bank challans (BSR code, CIN, receipt), and lock an immutable audit record.
-6. As a first-time visitor, I can complete a quick work email signup to run a free "compliance check" — upload a small worker sample and receive an immediate risk scorecard (e-Shram gaps, threshold breaches, estimated cess liability bracket) before upgrading.
-7. As a law-firm channel partner (e.g. JSA, Lexplosion), I can access a consolidated Partner Portal with delegated RBAC permissions to oversee compliance and filings across multiple client aggregators.
+1. As an ops lead, I can create an account (work email + password, auto-confirmed) and upload my gig-worker roster via CSV using either a daily activity ledger or a historical summary backfill.
+2. As an ops lead, I can see, for each worker, their rolling-90-day and cumulative FY day counts applying the 90-day single-aggregator threshold, and record worker-declared cross-platform days (promote-only) for the 120-day multi-aggregator threshold.
+3. As an ops lead, I can see which of my workers have registered e-Shram Universal Account Numbers (UAN) versus those with missing or pending registrations, with strict Aadhaar masking to the last 4 digits (raw Aadhaar never stored).
+4. As an ops lead, I see live deadline countdowns derived from my open filings, plus an in-app notification center — no email dispatch exists.
+5. As an ops lead, I can use a 4-step filing wizard to create a Form-XX quarterly draft, deposit a challan (number + UTR), and lock an immutable audit record (PAID filings reject further edits).
+6. As a first-time visitor, I can run a free "compliance check" — one public form, no signup — and receive an immediate heuristic risk scorecard; my contact is stored as a lead.
+7. As a law-firm channel partner, I can access a consolidated read-only Partner Portal over my granted client orgs (no impersonation, switching, or enforced access levels).
 
 **P1 — should have, post-MVP:**
-8. As an ops lead, I can see an estimated contribution amount under both calculation bases (1–2% category turnover vs. 5% worker payments ceiling) through a versioned regulatory config matrix, displaying side-by-side comparative savings.
-9. As an ops lead, I can connect via webhook/API so daily engagement ledger events sync automatically from internal dispatcher/payout systems.
-10. As an ops lead, I receive early warning alerts when workers approach the 75-day and 85-day engagement marks, preventing unexpected statutory obligation surprises.
+8. As an ops lead, I can see an estimated contribution amount under both calculation bases (1–2% category turnover vs. 5% worker payments ceiling) with side-by-side comparative savings. (Rates are hardcoded today; a versioned config matrix is roadmap.)
+9. As an ops lead, I can connect via webhook/API so daily engagement ledger events sync automatically from internal dispatcher/payout systems. (Not built — CSV upload only.)
+10. As an ops lead, I receive early warning alerts when workers approach the 75-day engagement mark, preventing unexpected statutory obligation surprises.
 
 **P2 — nice to have, later phases:**
 11. As an ops lead operating in Rajasthan or Karnataka, I can also track my state-specific welfare-board registration and obligations.
@@ -83,79 +83,78 @@ One important nuance the product must be built around: the **exact contribution 
 ## 7. Functional requirements by module
 
 ### 7.1 — Worker Registration & Identity Tracker (DPDP Compliant)
-- Ingest worker rosters via CSV/XLSX in two supported formats:
-  - **Daily Activity Ledger:** `(worker_id, date, earnings, reference_id)`
-  - **Historical Summary Backfill:** `(worker_id, total_days_worked, total_payouts, declared_external_days)`
-- **DPDP Act & Aadhaar Compliance:** Never persist raw 12-digit Aadhaar numbers. Automatically sanitize and mask Aadhaar to the last 4 digits (`XXXX-XXXX-1234`). Store the 12-digit e-Shram Universal Account Number (UAN) as the primary non-sensitive statutory identifier. Encrypt sensitive personal details (phone, bank info) using AES-256 field-level encryption.
+- Ingest worker rosters via CSV in two supported formats (see `docs/csv_templates/` for exact headers):
+  - **Daily Activity Ledger:** `(worker_id, worker_name, uan, aadhaar_last4, date, hours_worked, gross_payout, platform_turnover_attributed, trip_or_gig_count)`
+  - **Historical Summary Backfill:** `(worker_id, worker_name, uan, aadhaar_last4, period_start, period_end, total_active_days, total_payout, other_platform_days)`
+- **DPDP Act & Aadhaar Compliance:** Never persist raw 12-digit Aadhaar numbers. Server-side masking to the last 4 digits (`XXXX-XXXX-1234`). Store the 12-digit e-Shram Universal Account Number (UAN) as the primary non-sensitive statutory identifier. **Known gap:** phone numbers are stored plaintext (no field-level encryption); bank fields do not exist.
 - Track registration status: `REGISTERED_ON_ESHRAM`, `PENDING_SUBMISSION`, or `GAP_FLAGGED`.
 
 ### 7.2 — Days-Worked / Eligibility Engine
-- **Calendar Day Rule:** A worker is deemed engaged on any calendar day where recorded earnings are greater than zero ($> 0$).
-- **Single-Aggregator Threshold (90 Days):** Computes exact, authoritative days worked internally. Generates tiered alerts at 75 days (`APPROACHING_THRESHOLD`), 85 days (`AT_RISK_CRITICAL`), and 90 days (`ELIGIBLE`).
-- **Multi-Aggregator Threshold (120 Days):** Resolves cross-platform visibility constraints using worker-submitted self-declarations (`WorkerDeclaration`), clearly tagging cross-platform days as `Self-Reported` in dashboards and audit exports to safeguard the aggregator from third-party liability.
+- **Rolling + FY Day Rule:** The nightly job evaluates `max(rolling-90-day distinct count, FY internal days)`; ingestion counts ledger rows per worker.
+- **Single-Aggregator Threshold (90 Days):** 90+ single-platform days → `ELIGIBLE`.
+- **Approaching Band (75–89 Days):** `APPROACHING` — verify UAN linkage. There is no 85-day tier.
+- **Multi-Aggregator Threshold (120 Days):** `internal + declared external ≥ 120` with external $> 0$ → `ELIGIBLE_MULTI_AGGREGATOR` (shown as Eligible). Ingestion/declaration updates are promote-only; only the nightly sync demotes.
 
-### 7.3 — Filing Calendar & Lightweight Cron Alerting
-- **Statutory Deadlines:**
-  - **30 June:** Provisional Contribution Deposit (Form-XX).
-  - **31 October:** Final Annual Return with balance contribution (Form-XXI).
-- **Lightweight Cron Engine:** Scheduled daily database sweep runs at 00:30 IST. Dispatches transactional email reminders at 60, 30, 15, 7, 3, and 1 days before due dates.
-- **Penalty Accrual Calculator:** Automatically calculates 1% per month (12% annually) simple interest on unpaid balances for overdue filings, showing actual financial liability on dashboard countdown banners and weekly alerts.
+### 7.3 — Filing Calendar & Nightly Sync
+- **Statutory Deadlines (as implemented):**
+  - **Form-XX (Quarterly):** Q1 due 31 Jul, Q2 due 31 Oct (start year); Q3 due 31 Jan, Q4 due 30 Apr (end year).
+  - **Form-XXI (Annual):** due 30 Jun (end year); API-supported, no UI wizard.
+- **Deadline surfacing:** live countdown cards computed from open filings across the dashboard, filings page, and layout banner (hidden when nothing is open) + in-app notification center. No email dispatch exists.
+- **Penalty Calculator:** 1% per month simple interest (fractions rounded up) computed on demand in the simulator (labeled illustrative); nothing accrues automatically.
 
 ### 7.4 — Contribution Estimator & Statutory Ceiling (Section 114)
-- **Versioned Config Matrix:** Category-based rates (1.0%–2.0% of turnover) configured per financial year and sector.
+- **Hardcoded rates (no config matrix):** default 1.5% turnover rate; simulator offers 1.0%–2.0%.
 - **Statutory Ceiling Enforcement:** Automatically caps turnover-based liability at 5% of total annual payments made to gig workers.
 - **Comparative Analysis:** Presents a side-by-side comparison between the turnover rate and the 5% worker payment basis, highlighting the lower statutory obligation.
 
 ### 7.5 — Step-by-Step Filing Wizard & Challan Locker
-- Step-by-step wizard guides ops and finance leads through final calculations, turnover verification, and pre-fills official Form-XX and Form-XXI schedules.
-- Generates pixel-perfect official Ministry PDF filings via headless PDF generation.
-- Challan Locker: Ingests proof of deposit (CIN, BSR code, bank name, payment date, uploaded bank receipt PDF) and cryptographically locks the filing record with a SHA-256 digest for audit immutability.
+- 4-step wizard (Period & Numbers → Cess Formula → Worker Census → Verification) guides ops and finance leads through quarterly numbers and creates a `DRAFT` filing (duplicates refresh).
+- Challan Locker: records challan number + UTR (bank/amount/date defaulted) and cryptographically locks the filing with a SHA-256 digest (`PAID` rejects further PATCH with `409`). No receipt upload, no BSR/CIN fields, no PDF generation.
 
 ### 7.6 — Free Compliance Check (Lead-Gen Funnel)
-- Gated behind a fast work email verification and account creation.
-- Visitor uploads a sample CSV of up to 500 workers.
-- Generates an immediate interactive Risk Scorecard: e-Shram gap percentage, 90-day threshold breaches, estimated cess liability bracket, and deadline countdown with penalty estimates.
-- Unlocks download of the full Diagnostic Compliance Audit Report (PDF) with direct conversion to paid plans.
+- Public single-form estimator — no signup, no email verification, no CSV upload.
+- Returns an immediate heuristic Risk Scorecard (score, risk rating, eligible-worker estimate, cess estimate, penalty proxy, gaps, recommendations) and stores an `audit_leads` row best-effort.
+- No PDF report, no trial provisioning, no paid-plan flow.
 
-### 7.7 — Multi-Tenant & Delegated Law-Firm Advisor Portal
-- Strict tenant isolation for aggregators.
-- Delegated Advisor Access: Employment and labour law firms (channel partners) log into a centralized Partner Portal to switch between client accounts with granular RBAC permissions (`AUDITOR_READ_ONLY`, `COMPLIANCE_MANAGER`).
+### 7.7 — Multi-Tenant & Law-Firm Advisor Portal
+- Strict tenant isolation for aggregators (application scoping + RLS; partner reads via `partner_client_access` grants).
+- Advisor Portal: read-only multi-client console (live worker/filing aggregates, open liability, health score). No impersonation, client switching, enforced access levels, grant UI, or invite flow.
 
 ---
 
 ## 8. Data model
 
-See the complete PostgreSQL and Prisma schema specification in [`tech_spec_and_db_schema.md`](file:///c:/Users/admin/Desktop/work/freelance%20wali%20platform/tech_spec_and_db_schema.md).
+See the complete Supabase SQL schema in [`tech_spec_and_db_schema.md`](./tech_spec_and_db_schema.md) (§7) and `app/supabase/migrations/`.
 
 ```
 Organization (Aggregator or Advisory Partner)
-├── id, name, type, sector, cinOrRegistration, turnover, workerPayouts
-├── Users[] (Role-based access: Org Admin, Ops Manager, Finance Lead, External Advisor)
-├── PartnerClientAccess[] (Delegated access for law firms)
+├── id, name, type, sector, cinOrRegistration, gstin, turnover, workerPayouts, registeredAddress
+├── Profiles[] (id = auth.users.id; roles: Org Admin, Ops Manager, Finance Lead, External Advisor)
+├── PartnerClientAccess[] (grants for law firms; access_level recorded, not enforced)
 ├── Workers[]
 │   ├── id, workerInternalCode, fullName, uan (e-Shram 12-digit)
-│   ├── maskedAadhaar ("XXXX-XXXX-1234"), phoneEncrypted (AES-256)
+│   ├── maskedAadhaar ("XXXX-XXXX-1234"), phone (plaintext — known gap)
 │   ├── registrationStatus, eligibilityStatus
-│   ├── DailyEngagementLedger[] (date, grossEarnings, tripOrTaskId)
-│   ├── WorkerAnnualAggregate[] (internalDays, declaredExternalDays, totalDays)
-│   └── WorkerDeclarations[] (self-reported external platform days)
+│   ├── DailyEngagementLedger[] (date, grossEarnings, tripOrTaskId, sourceBatchId)
+│   ├── WorkerAnnualAggregate[] (internalDays, declaredExternalDays, totalDays, isEligible)
+│   └── WorkerDeclarations[] (platform name, day count, FY — no period/provenance columns)
 └── FilingRecords[]
-    ├── id, financialYear, formType (Form-XX / Form-XXI / Form-XXII)
-    ├── dueDate, status, turnover, payouts, assessedAmount, statutoryCeiling, balancePayable
-    ├── accruedInterestPenalty (1% per month overdue)
+    ├── id, financialYear, quarter, formType (quarterly Form-XX / annual Form-XXI)
+    ├── dueDate, status (DRAFT/SUBMITTED/PAID/OVERDUE), turnover, payouts, assessedAmount, statutoryCeiling, balancePayable
+    ├── accruedInterestPenalty (computed on demand, not accrued)
     ├── lockedHashSha256
-    └── FilingChallans[] (cin, bsrCode, bankName, depositDate, challanReceiptUrl)
+    └── FilingChallans[] (challanNumber, bankName, utrNumber, amount, paymentDate, sha256Hash — no CIN/BSR/receipt)
 ```
 
 ---
 
 ## 9. Non-functional requirements
 
-- **DPDP Act 2023 & UIDAI Strict Adherence:** Zero storage of raw 12-digit Aadhaar numbers. Strict client-side and ingestion-level masking to last 4 digits. AES-256 encryption on PII fields.
-- **Audit Provenance:** Every calculation, data ingestion, and status change generates an immutable `AuditLog` entry capturing actor, IP, timestamp, and changes.
-- **Data Provenance on Multi-Aggregator Days:** Cross-platform days are explicitly marked as "Self-Reported" with digital or document attestation to ensure zero legal liability on the aggregator for external data errors.
-- **High Alert Reliability:** Lightweight cron runs daily; failure to deliver statutory alerts is treated as a critical P0 service event.
-- **Config-Driven Regulation:** Contribution rates, statutory caps, and filing dates are stored in configuration tables (`ContributionRateConfig`), allowing instant regulatory updates without code deployments.
+- **DPDP Act 2023 & UIDAI Strict Adherence:** Zero storage of raw 12-digit Aadhaar numbers. Server-side masking to last 4 digits at ingestion. **Known gap:** phone numbers are stored plaintext; no field-level encryption exists (see tech spec §4).
+- **Audit Provenance:** State-changing routes write append-only `audit_logs` rows (actor, timestamp, metadata). Audit write failures are server-logged, never request-breaking; there is no hash chain.
+- **Data Provenance on Multi-Aggregator Days:** Declarations return `RECORDED` (never auto-verified); no provenance tag column is stored.
+- **Alert Reliability:** The nightly eligibility sync reconciles statuses and writes per-org audit rows; in-app alerts reflect new states on next load. No email dispatch exists.
+- **Config-Driven Regulation:** Aspirational — rates, caps, and due-date mappings are currently hardcoded (default 1.5%, 5% cap, FY-derived due dates).
 
 ---
 
@@ -163,26 +162,26 @@ Organization (Aggregator or Advisory Partner)
 
 | Metric | MVP target (first 90 days post-launch) | Rationale |
 |---|---|---|
-| Free compliance checks run | 100+ | Top-of-funnel signal via gated work-email funnel |
-| Check → paid conversion rate | Track from day 1 | Gated signup creates higher intent leads |
+| Free compliance checks run | 100+ | Top-of-funnel signal via public estimator + lead capture |
+| Check → paid conversion rate | Track from day 1 | Lead rows in `audit_leads`; no funnel analytics events yet |
 | Paying customers | 10–15 | Direct aggregators + law-firm channel partners |
-| Customers correctly alerted ahead of 31 October deadline | 100% of active customers | Zero missed deadline policy |
+| Customers correctly alerted ahead of deadlines | 100% of active customers | Live countdowns from open filings; zero-email policy means in-app only |
 | Calculation & statutory capping accuracy | 100% | Guaranteed adherence to Section 114 & Central Rules |
 
 ---
 
 ## 11. Rollout plan
 
-- **Phase 1 (Weeks 1–2): Foundation & Security:** Next.js + PostgreSQL/Prisma setup, work-email auth, DPDP Aadhaar masking sanitizer, and base schema.
-- **Phase 2 (Weeks 3–4): Hybrid Ingestion & Engine:** Daily activity ledger parser, historical backfill importer, 90-day calculation, and worker-declaration flow.
-- **Phase 3 (Weeks 5–6): Filing Wizard & Challan Locker:** Form-XX/XXI step wizard, Puppeteer PDF generator, and BSR/CIN challan locking.
-- **Phase 4 (Weeks 7–8): Daily Cron Alerting & Partner Console:** Daily sweep cron, 1% monthly interest accrual, SES transactional emails, and multi-client advisor portal.
-- **Phase 5 (Weeks 9–10): Free Compliance Audit Launch:** Gated public lead-gen funnel, sample CSV audit scorecard, and pilot customer onboarding before the 31 October filing deadline.
+- **Phase 1 (Weeks 1–2): Foundation & Security:** Next.js + Supabase (RLS) setup, work-email registration, Aadhaar masking sanitizer, and base schema.
+- **Phase 2 (Weeks 3–4): Hybrid Ingestion & Engine:** Daily activity ledger parser, historical backfill importer, shared 90/120/75 calculation, and worker-declaration flow.
+- **Phase 3 (Weeks 5–6): Filing Wizard & Challan Locker:** Form-XX 4-step wizard, SHA-256 challan lock with PAID immutability. (No PDF generation.)
+- **Phase 4 (Weeks 7–8): Nightly Sync & Partner Console:** Eligibility sync job with per-org audit rows, read-only multi-client advisor portal. (No email dispatch, no RBAC enforcement.)
+- **Phase 5 (Weeks 9–10): Free Compliance Audit Launch:** Public estimator funnel with heuristic scorecard + lead capture, and pilot customer onboarding.
 
 ---
 
 ## 12. Supporting Documents & Technical Specifications
 
-- [`tech_spec_and_db_schema.md`](file:///c:/Users/admin/Desktop/work/freelance%20wali%20platform/tech_spec_and_db_schema.md) — Comprehensive technical architecture, calculation engine logic, privacy controls, and full PostgreSQL Prisma schema.
+- [`tech_spec_and_db_schema.md`](./tech_spec_and_db_schema.md) — Comprehensive technical architecture, calculation engine logic, privacy controls, and full Supabase SQL schema.
 - `india-govt-startup-opportunities.md` — Market research and regulatory background.
 - `gig-cess-2min-pitch.md` — Investor and partner pitch narrative.

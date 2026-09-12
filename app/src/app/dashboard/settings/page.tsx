@@ -1,32 +1,82 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Settings,
   Building2,
   Users,
-  Shield,
-  Key,
   Save,
-  Mail,
-  UserPlus,
   CheckCircle2,
 } from "lucide-react";
-import { mockOrganization } from "@/lib/data-store";
+import { mockOrganization } from "@/lib/types";
 
 export default function OrganizationSettingsPage() {
   const [org, setOrg] = useState(mockOrganization);
-  const [team, setTeam] = useState([
-    { id: "usr-1", name: "Arjun Verma", email: "compliance@quickmove.in", role: "ADMIN", status: "ACTIVE" },
-    { id: "usr-2", name: "Priya Sundaram", email: "legal@quickmove.in", role: "COMPLIANCE_OFFICER", status: "ACTIVE" },
-    { id: "usr-3", name: "Singhania & Partners", email: "audit@singhania.law", role: "EXTERNAL_AUDITOR", status: "ACTIVE" },
-  ]);
+  const [team, setTeam] = useState<{ id: string; name: string; email: string; role: string }[]>([]);
   const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
 
-  function handleSave(e: React.FormEvent) {
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [orgRes, teamRes] = await Promise.all([
+          fetch("/api/v1/organizations"),
+          fetch("/api/v1/team"),
+        ]);
+        if (cancelled) return;
+        const [orgJson, teamJson] = await Promise.all([orgRes.json(), teamRes.json()]);
+        if (orgJson.success) {
+          setOrg((prev) => ({
+            ...prev,
+            legalName: orgJson.data.legalName || prev.legalName,
+            sector: orgJson.data.sector || prev.sector,
+            cin: orgJson.data.cin || prev.cin,
+            gstin: orgJson.data.gstin || prev.gstin,
+            registeredAddress: orgJson.data.registeredAddress ?? prev.registeredAddress,
+          }));
+        }
+        if (teamJson.success) setTeam(teamJson.data.members);
+      } catch (err) {
+        console.error("Settings load failed:", err);
+        // Static fallback org above stays; team list stays empty.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleSave(e: React.FormEvent) {
     e.preventDefault();
-    setSaved(true);
-    setTimeout(() => setSaved(false), 3000);
+    setSaving(true);
+    setErrorMsg("");
+    try {
+      const res = await fetch("/api/v1/organizations", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          legalName: org.legalName,
+          sector: org.sector,
+          cin: org.cin,
+          gstin: org.gstin,
+          registeredAddress: org.registeredAddress,
+        }),
+      });
+      const json = await res.json();
+      if (!json.success) {
+        setErrorMsg(json.error?.message || "Save failed");
+        return;
+      }
+      setSaved(true);
+      setTimeout(() => setSaved(false), 3000);
+    } catch (err) {
+      console.error("Settings save failed:", err);
+      setErrorMsg("Network error saving settings");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
@@ -46,6 +96,12 @@ export default function OrganizationSettingsPage() {
         <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-xs text-emerald-300 flex items-center gap-2 animate-in fade-in">
           <CheckCircle2 className="w-4 h-4 text-emerald-400" />
           <span>Organization settings saved successfully.</span>
+        </div>
+      )}
+
+      {errorMsg && (
+        <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs text-rose-300">
+          {errorMsg}
         </div>
       )}
 
@@ -119,9 +175,10 @@ export default function OrganizationSettingsPage() {
           <div className="pt-3 border-t border-slate-800 flex justify-end">
             <button
               type="submit"
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs rounded-lg flex items-center gap-1.5 shadow"
+              disabled={saving}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-semibold text-xs rounded-lg flex items-center gap-1.5 shadow"
             >
-              <Save className="w-3.5 h-3.5" /> Save Changes
+              <Save className="w-3.5 h-3.5" /> {saving ? "Saving..." : "Save Changes"}
             </button>
           </div>
         </form>
@@ -132,12 +189,12 @@ export default function OrganizationSettingsPage() {
             <h3 className="text-sm font-bold text-white flex items-center gap-2">
               <Users className="w-4 h-4 text-blue-400" /> Compliance Team
             </h3>
-            <button className="text-xs text-blue-400 hover:underline flex items-center gap-1">
-              <UserPlus className="w-3.5 h-3.5" /> Invite
-            </button>
           </div>
 
           <div className="space-y-2.5 text-xs">
+            {team.length === 0 && (
+              <p className="text-slate-500 text-[11px]">No team members found.</p>
+            )}
             {team.map((m) => (
               <div key={m.id} className="p-3 bg-slate-900 rounded-lg border border-slate-800 space-y-1">
                 <div className="flex items-center justify-between">

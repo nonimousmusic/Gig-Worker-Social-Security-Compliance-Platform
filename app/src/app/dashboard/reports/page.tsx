@@ -5,8 +5,6 @@ import {
   FileCheck,
   Download,
   Printer,
-  ShieldCheck,
-  Building,
   CheckCircle2,
   Lock,
   Hash,
@@ -59,8 +57,8 @@ export default function StatutoryReportsPage() {
         if (json.success) {
           setReport(json.data);
         }
-      } catch {
-        // Handled gracefully
+      } catch (err) {
+        console.error("Audit report load failed:", err);
       } finally {
         setLoading(false);
       }

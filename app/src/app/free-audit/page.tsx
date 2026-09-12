@@ -7,12 +7,6 @@ import {
   CheckCircle2,
   AlertTriangle,
   ArrowRight,
-  TrendingUp,
-  Percent,
-  Lock,
-  Download,
-  Building,
-  Users,
 } from "lucide-react";
 
 export default function FreeAuditToolPage() {
@@ -53,8 +47,8 @@ export default function FreeAuditToolPage() {
       if (json.success) {
         setScorecard(json.data.scorecard);
       }
-    } catch {
-      // Handled gracefully
+    } catch (err) {
+      console.error("Free audit request failed:", err);
     } finally {
       setLoading(false);
     }

@@ -4,69 +4,122 @@ import { useState, useEffect } from "react";
 import {
   Lock,
   ShieldCheck,
-  Upload,
   CheckCircle2,
-  FileText,
   Hash,
-  Building,
-  Calendar,
-  CreditCard,
   Plus,
-  ExternalLink,
 } from "lucide-react";
-import { ChallanItem } from "@/lib/data-store";
+import { ChallanItem } from "@/lib/types";
 
 export default function ChallanVaultPage() {
   const [challans, setChallans] = useState<ChallanItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
 
+  const [openFilings, setOpenFilings] = useState<
+    { id: string; label: string; finalCessPayable: number }[]
+  >([]);
+
   const [form, setForm] = useState({
-    filingId: "fl-q2-2025",
+    filingId: "",
     challanNumber: "",
     bankName: "State Bank of India — Treasury Branch",
     utrNumber: "",
-    amount: "577500",
+    amount: "",
     paymentDate: new Date().toISOString().split("T")[0],
   });
   const [uploading, setUploading] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
 
-  async function loadChallans() {
-    try {
-      const res = await fetch("/api/v1/filings");
-      const json = await res.json();
-      if (json.success) {
-        // Find paid filings and mock challan objects
-        const paidFilings = json.data.filings.filter((f: { status: string }) => f.status === "PAID");
-        const list: ChallanItem[] = paidFilings.map((f: { id: string; challanNumber: string; finalCessPayable: number; submittedAt: string; challanUrl: string }) => ({
-          id: `chl-${f.id}`,
-          filingId: f.id,
-          challanNumber: f.challanNumber || "CHL-2025-Q1-09823",
-          bankName: "State Bank of India — Central Treasury Branch",
-          utrNumber: "SBIN00293819283",
-          amount: f.finalCessPayable,
-          paymentDate: (f.submittedAt || "2025-07-28").split("T")[0],
-          verified: true,
-          lockedAt: f.submittedAt || new Date().toISOString(),
-          sha256Hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-          documentUrl: f.challanUrl || "/sample-challan-q1.pdf",
-        }));
-        setChallans(list);
-      }
-    } catch {
-      // Fallback
-    } finally {
-      setLoading(false);
-    }
+  async function applyFilingsData(filings: {
+    id: string;
+    status: string;
+    financialYear: string;
+    quarter?: string;
+    filingType: string;
+    finalCessPayable: number;
+    challanId?: string;
+    challanNumber?: string;
+    bankName?: string;
+    utrNumber?: string;
+    sha256Hash?: string;
+    paymentDate?: string;
+    challanVerified?: boolean;
+    submittedAt?: string;
+    challanUrl?: string;
+  }[]) {
+    // Filings still awaiting payment (DRAFT/SUBMITTED) for the deposit dropdown.
+    const open = filings
+      .filter((f) => f.status !== "PAID")
+      .map((f) => ({
+        id: f.id,
+        label: `${f.filingType === "FORM_XXI_ANNUAL" ? "Form-XXI" : "Form-XX"}: ${f.quarter ? `${f.quarter} ` : ""}FY ${f.financialYear} | Cess: ₹${f.finalCessPayable.toLocaleString("en-IN")}`,
+        finalCessPayable: f.finalCessPayable,
+      }));
+
+    setOpenFilings(open);
+    setForm((prev) => {
+      const first = open[0];
+      return {
+        ...prev,
+        filingId: first?.id || "",
+        amount: first ? String(first.finalCessPayable) : prev.amount,
+      };
+    });
+
+    // Paid filings carry their locked challan (bank, UTR, hash) from the API.
+    const paidFilings = filings.filter((f) => f.status === "PAID");
+    const list: ChallanItem[] = paidFilings.map((f) => ({
+      id: f.challanId || `chl-${f.id}`,
+      filingId: f.id,
+      challanNumber: f.challanNumber || "Not yet deposited",
+      bankName: f.bankName || "—",
+      utrNumber: f.utrNumber || "—",
+      amount: f.finalCessPayable,
+      paymentDate: f.paymentDate || (f.submittedAt || "").split("T")[0] || "—",
+      verified: f.challanVerified ?? true,
+      lockedAt: f.submittedAt || new Date().toISOString(),
+      sha256Hash: f.sha256Hash || "—",
+      documentUrl: f.challanUrl || "",
+    }));
+    setChallans(list);
   }
 
   useEffect(() => {
-    loadChallans();
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/v1/filings");
+        const json = await res.json();
+        if (!cancelled && json.success) {
+          applyFilingsData(json.data.filings);
+        }
+      } catch (err) {
+        console.error("Challans load failed:", err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  async function reloadChallans() {
+    try {
+      const res = await fetch("/api/v1/filings");
+      const json = await res.json();
+      if (json.success) applyFilingsData(json.data.filings);
+    } catch (err) {
+      console.error("Challans reload failed:", err);
+    }
+  }
 
   async function handleChallanSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!form.filingId) {
+      setErrorMsg("No open filing available to lock. Create or submit a filing first.");
+      return;
+    }
     setUploading(true);
     setErrorMsg("");
 
@@ -89,8 +142,9 @@ export default function ChallanVaultPage() {
         return;
       }
       setIsUploadModalOpen(false);
-      loadChallans();
-    } catch {
+      reloadChallans();
+    } catch (err) {
+      console.error("Challan lock request failed:", err);
       setErrorMsg("Network error during challan lock");
     } finally {
       setUploading(false);
@@ -225,10 +279,24 @@ export default function ChallanVaultPage() {
                 <label className="block text-slate-300 mb-1">Target Filing Return *</label>
                 <select
                   value={form.filingId}
-                  onChange={(e) => setForm({ ...form, filingId: e.target.value })}
+                  onChange={(e) => {
+                    const selected = openFilings.find((o) => o.id === e.target.value);
+                    setForm({
+                      ...form,
+                      filingId: e.target.value,
+                      amount: selected ? String(selected.finalCessPayable) : form.amount,
+                    });
+                  }}
                   className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-white"
                 >
-                  <option value="fl-q2-2025">Form-XX: Q2 FY 2025-26 (Turnover: ₹3.85 Cr | Cess: ₹5,77,500)</option>
+                  {openFilings.length === 0 && (
+                    <option value="">No open filings — create one from the Filings page</option>
+                  )}
+                  {openFilings.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      {o.label}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -303,8 +371,8 @@ export default function ChallanVaultPage() {
                 </button>
                 <button
                   type="submit"
-                  disabled={uploading}
-                  className="px-4 py-2 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-500"
+                  disabled={uploading || !form.filingId}
+                  className="px-4 py-2 rounded-lg bg-emerald-600 text-white font-bold hover:bg-emerald-500 disabled:opacity-50"
                 >
                   {uploading ? "Locking..." : "Verify & Lock Return"}
                 </button>

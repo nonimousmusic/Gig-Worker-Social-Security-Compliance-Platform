@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { calculateContribution } from "@/lib/contribution-calc";
+import { createClient } from "@/lib/supabase/server";
 
 export async function POST(req: NextRequest) {
   try {
@@ -15,9 +16,12 @@ export async function POST(req: NextRequest) {
       currentFilingPractices,
     } = body;
 
-    const workers = parseInt(workerCount || "500", 10);
-    const turnover = parseFloat(annualTurnover || "50000000"); // 5 Cr default
-    const payout = parseFloat(annualPayout || "28000000"); // 2.8 Cr default
+    const rawWorkers = parseInt(workerCount || "500", 10);
+    const rawTurnover = parseFloat(annualTurnover || "50000000"); // 5 Cr default
+    const rawPayout = parseFloat(annualPayout || "28000000"); // 2.8 Cr default
+    const workers = Number.isNaN(rawWorkers) ? 500 : Math.max(0, rawWorkers);
+    const turnover = Number.isNaN(rawTurnover) ? 50000000 : Math.max(0, rawTurnover);
+    const payout = Number.isNaN(rawPayout) ? 28000000 : Math.max(0, rawPayout);
 
     const calc = calculateContribution({
       annualTurnover: turnover,
@@ -25,15 +29,25 @@ export async function POST(req: NextRequest) {
       ratePercentage: 1.5,
     });
 
-    // Scorecard logic
-    let riskScore = 85;
+    // Heuristic marketing estimator (not a statutory determination):
+    // starts from a neutral baseline and adjusts for filing posture.
+    const BASE_COMPLIANCE_SCORE = 85;
+    const NO_FILING_DEDUCTION = 35;
+    const MANUAL_TRACKING_DEDUCTION = 15;
+    const MIN_SCORE = 25;
+    // Share of headcount typically active enough to qualify (planning estimate).
+    const ESTIMATED_ELIGIBLE_SHARE = 0.76;
+    // Flat annual-interest proxy (12% p.a. simple) for illustration only.
+    const ANNUAL_INTEREST_PROXY = 0.12;
+
+    let complianceScore = BASE_COMPLIANCE_SCORE;
     const flags: string[] = [];
 
     if (currentFilingPractices === "NONE") {
-      riskScore -= 35;
+      complianceScore -= NO_FILING_DEDUCTION;
       flags.push("No statutory cess filing mechanism currently deployed");
     } else if (currentFilingPractices === "SPREADSHEETS") {
-      riskScore -= 15;
+      complianceScore -= MANUAL_TRACKING_DEDUCTION;
       flags.push("Manual spreadsheet tracking lacks immutable SHA-256 audit trails required under DPDP & Section 114");
     }
 
@@ -41,7 +55,26 @@ export async function POST(req: NextRequest) {
       flags.push("High worker volume requires automated 90/120-day rolling window tracking");
     }
 
-    const estimatedEligibleWorkers = Math.round(workers * 0.76);
+    const estimatedEligibleWorkers = Math.round(workers * ESTIMATED_ELIGIBLE_SHARE);
+    complianceScore = Math.max(MIN_SCORE, complianceScore);
+
+    // Persist the marketing lead (best-effort: never fail the audit itself).
+    try {
+      const supabase = await createClient();
+      await supabase.from("audit_leads").insert({
+        company_name: companyName || null,
+        contact_email: contactEmail || null,
+        contact_phone: contactPhone || null,
+        sector: sector || null,
+        worker_count: Number.isNaN(workers) ? null : workers,
+        annual_turnover: turnover,
+        annual_payout: payout,
+        filing_practices: currentFilingPractices || null,
+        compliance_score: complianceScore,
+      });
+    } catch {
+      // Lead capture is non-critical.
+    }
 
     return NextResponse.json({
       success: true,
@@ -53,14 +86,14 @@ export async function POST(req: NextRequest) {
           sector: sector || "LOGISTICS_DELIVERY",
         },
         scorecard: {
-          complianceScore: Math.max(25, riskScore),
-          riskRating: riskScore < 60 ? "HIGH RISK" : riskScore < 80 ? "MEDIUM RISK" : "COMPLIANT",
+          complianceScore,
+          riskRating: complianceScore < 60 ? "HIGH RISK" : complianceScore < 80 ? "MEDIUM RISK" : "COMPLIANT",
           estimatedEligibleWorkers,
           annualTurnover,
           estimatedAnnualCess: calc.finalObligation.amount,
           payoutCap: calc.workerPaymentBasis.amount,
           isCappedByPayout: calc.finalObligation.basisUsed === "WORKER_PAYMENT_5PCT_CEILING",
-          potentialPenaltyRiskAnnual: Math.round(calc.finalObligation.amount * 0.12), // 12% compounding
+          potentialPenaltyRiskAnnual: Math.round(calc.finalObligation.amount * ANNUAL_INTEREST_PROXY),
           identifiedGaps: flags,
           recommendations: [
             "Implement daily engagement logging with automated Aadhaar masking",

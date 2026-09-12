@@ -1,7 +1,7 @@
 # Regulatory Reference Guide
 ## Code on Social Security, 2020 — Platform Compliance Mapping
 
-**Version:** 1.0  
+**Version:** 2.0 (platform-implementation cells corrected)
 **Date:** 12 September 2026  
 **Purpose:** Map every statutory obligation to the platform feature that addresses it, with exact section/rule references.
 
@@ -108,34 +108,32 @@ Per the Central Rules, 2026, a worker is deemed **"engaged"** on any calendar da
 
 | Rule | Legal Basis | Platform Implementation |
 |---|---|---|
-| A gig worker becomes eligible for social security benefits after working 90 days in a financial year with a single aggregator | Section 114(3)(a), Rule 48(1) | `WorkerAnnualAggregate.internalDaysWorked >= 90` → `ELIGIBLE` |
-| "Working" means earning any income on a calendar day | Rule 48(2) | `DailyEngagementLedger.grossEarnings > 0` counts as 1 engaged day |
-| Financial year: 1 April to 31 March | General statutory definition | FY tracking via `financialYear` field (e.g., "2026-2027") |
+| A gig worker becomes eligible for social security benefits after 90 single-aggregator days (platform evaluates `max(rolling-90-day count, FY internal days)`) | Section 114(3)(a), Rule 48(1) | `calculateEligibility()` → `ELIGIBLE` |
+| "Working" means earning any income on a calendar day | Rule 48(2) | Ledger rows count as engaged days (note: ingestion counts rows even at ₹0 — the >₹0 rule is not enforced in code) |
+| Financial year: 1 April to 31 March | General statutory definition | FY tracking via `financial_year` field (e.g., "2026-2027") |
 
-**Platform Thresholds:**
+**Platform Thresholds (single `APPROACHING` band — no 85-day tier):**
 
 | Days Worked | Status | Alert Level |
 |---|---|---|
-| 0–74 | `NOT_YET_ELIGIBLE` | No alert |
-| 75–84 | `APPROACHING_THRESHOLD` | ℹ️ Informational alert |
-| 85–89 | `AT_RISK_CRITICAL` | ⚠️ Critical alert |
+| 0–74 | `INACTIVE` | No alert |
+| 75–89 | `APPROACHING` | ℹ️ Informational alert |
 | 90+ | `ELIGIBLE` | ✅ Eligible — included in contribution base |
 
 ### 4.2 — Multi-Aggregator 120-Day Threshold
 
 | Rule | Legal Basis | Platform Implementation |
 |---|---|---|
-| A gig worker becomes eligible after working 120 days cumulatively across **all** aggregators in a financial year | Section 114(3)(b), Rule 48(3) | `WorkerAnnualAggregate.totalCumulativeDays >= 120` → `ELIGIBLE_MULTI_AGGREGATOR` |
-| Days are counted cumulatively — a day worked on multiple platforms still counts as one day | Rule 48(4) | Worker self-declaration with deduplication warning |
+| A gig worker becomes eligible after working 120 days cumulatively across **all** aggregators in a financial year | Section 114(3)(b), Rule 48(3) | `internal + external >= 120` **and** `external > 0` → `ELIGIBLE_MULTI_AGGREGATOR` |
+| Days are counted cumulatively — a day worked on multiple platforms still counts as one day | Rule 48(4) | Worker self-declaration; platform sums without dedup (see Q2 below) |
 
 **Cross-Platform Visibility Constraint:**
 
 No aggregator has natural visibility into another aggregator's data. The platform resolves this through:
 
-1. **Authoritative Internal Count:** Days on the current platform are computed directly from `DailyEngagementLedger`.
-2. **Worker Self-Declaration:** The worker (or ops lead on their behalf) declares days worked on other platforms via `WorkerDeclaration`.
-3. **Provenance Tagging:** All self-reported days carry `provenance: "SELF_REPORTED_WORKER_DECLARATION"` in dashboards, exports, and PDFs.
-4. **No Liability Transfer:** The aggregator is explicitly not liable for the accuracy of self-reported third-party data.
+1. **Authoritative Internal Count:** Days on the current platform are computed from `daily_engagement_ledger` rows.
+2. **Worker Self-Declaration:** The worker (or ops lead on their behalf) declares days worked on other platforms via `worker_declarations` (platform name + day count; no file, no stored provenance tag).
+3. **No Liability Transfer (intent):** Self-reported data should be treated as unverified; the API echoes `status: "RECORDED"`, never verified.
 
 ---
 
@@ -145,10 +143,10 @@ No aggregator has natural visibility into another aggregator's data. The platfor
 
 | Parameter | Legal Basis | Value | Platform Implementation |
 |---|---|---|---|
-| Contribution basis option 1 | Section 114(5)(a) | 1%–2% of aggregator's annual turnover (rate varies by category) | `ContributionRateConfig.ratePercentage` |
-| Contribution basis option 2 / ceiling | Section 114(5)(b) | 5% of total payments made to gig workers | `ContributionRateConfig.maxWorkerPayoutPct = 5.00` |
+| Contribution basis option 1 | Section 114(5)(a) | 1%–2% of aggregator's annual turnover (rate varies by category) | Hardcoded rate (default 1.5%; simulator offers 1.0–2.0%) — no rate table exists |
+| Contribution basis option 2 / ceiling | Section 114(5)(b) | 5% of total payments made to gig workers | Hardcoded 5% in `contribution-calc.ts` |
 | Statutory obligation | Section 114(5) | Lesser of (turnover rate) and (5% worker payments) | `min(turnoverBasis, workerPaymentCeiling)` |
-| Category-specific rates | Section 114(6), pending gazette notification | Varies by sector (1.0%–2.0%) | `ContributionRateConfig` rows keyed by sector + FY |
+| Category-specific rates | Section 114(6), pending gazette notification | Varies by sector (1.0%–2.0%) | No config table or admin panel — code change required |
 
 ### 5.2 — Rate Configuration Status
 
@@ -160,29 +158,29 @@ No aggregator has natural visibility into another aggregator's data. The platfor
 | Freelance/marketplace | ~1.0% | Pending final notification |
 | Healthcare/personal services | ~1.0% | Pending final notification |
 
-> **⚠️ Important:** Category-specific rates under Section 114(6) are still being operationalized as of this document's date. The platform uses configurable rates via `ContributionRateConfig` that can be updated via admin panel immediately when gazette notifications are published. Until confirmed, all calculations are clearly labeled as estimates.
+> **⚠️ Important:** Category-specific rates under Section 114(6) are still being operationalized as of this document's date. The platform currently hardcodes rates — there is no `ContributionRateConfig` table or admin panel. Until confirmed, all calculations are clearly labeled as estimates.
 
 ---
 
 ## 6. Filing Calendar & Forms
 
-### 6.1 — Form-XX: Provisional Contribution Deposit
+### 6.1 — Form-XX: Quarterly Contribution Filings (as implemented)
 
 | Parameter | Detail | Legal Basis |
 |---|---|---|
-| **Due Date** | 30 June each year | Rule 49(1) |
-| **Content** | Provisional estimate of turnover and worker payments for the financial year, with calculated provisional contribution | Rule 49(2) |
-| **Action Required** | Deposit provisional contribution amount with designated bank | Rule 49(3) |
-| **Platform Feature** | Filing Wizard Step 1–4, PDF generation, Challan upload | Module 7.5 |
+| **Due Dates** | Q1 → 31 Jul, Q2 → 31 Oct (start year); Q3 → 31 Jan, Q4 → 30 Apr (end year) — derived from the FY | Platform mapping |
+| **Content** | Quarterly turnover and worker payouts with server-computed cess | Filing wizard |
+| **Action Required** | Deposit contribution with designated bank, lock via challan (number + UTR) | Rule 49(3) |
+| **Platform Feature** | 4-step wizard → `DRAFT`; challan JSON deposit; `PAID` lock | Module 7.5 |
 
-### 6.2 — Form-XXI: Final Annual Return
+### 6.2 — Form-XXI: Final Annual Return (API-supported)
 
 | Parameter | Detail | Legal Basis |
 |---|---|---|
-| **Due Date** | 31 October each year | Rule 49(4) |
-| **Content** | Audited/actual turnover, actual worker payments, final assessed contribution, less provisional deposit, balance payable | Rule 49(5) |
+| **Due Date** | 30 June of the end year (as implemented) | Platform mapping |
+| **Content** | Annual turnover, worker payments, assessed contribution | `POST /filings` with `FORM_XXI_ANNUAL` |
 | **Action Required** | Pay balance contribution, file return with challan proof | Rule 49(6) |
-| **Platform Feature** | Filing Wizard Step 1–5, PDF generation, Challan upload, Audit lock | Module 7.5 |
+| **Platform Feature** | API-supported; no UI wizard | Module 7.5 |
 
 ### 6.3 — Form-XXII: Refund Claim
 
@@ -193,22 +191,18 @@ No aggregator has natural visibility into another aggregator's data. The platfor
 | **Government SLA** | 90 days from claim submission | Rule 49(9) |
 | **Platform Feature** | Automatic detection of negative balance, Form-XXII generation, 90-day SLA tracker | P2 feature |
 
-### 6.4 — Annual Filing Timeline
+### 6.4 — Annual Filing Timeline (as implemented)
 
 ```
 Financial Year: 1 April 2026 — 31 March 2027
 
-Apr 2026 ──────────────── Jun 2026 ──── Jul ──── Oct 2026 ──── Nov ──── Mar 2027
-   │                         │                      │                      │
-   FY Start               Form-XX Due            Form-XXI Due          FY End
-                          (30 June)              (31 October)
-                             │                      │
-                     Provisional deposit      Final return + balance
-                                              
-Alert Schedule:         60d  30d  15d  7d  3d  1d
-                        ↓    ↓    ↓    ↓   ↓   ↓
-                     1 May 1 Jun 15 Jun 23J 27J 29J  (for Form-XX)
-                     1 Sep 1 Oct 16 Oct 24O 28O 30O  (for Form-XXI)
+Apr ────── Jul 31 ──── Oct 31 ──── Jan 31 ──── Apr 30 ──── Jun 30
+ │           │            │            │            │            │
+ │        Q1 due        Q2 due       Q3 due       Q4 due     XXI annual
+ │     (Form-XX)    (Form-XX)    (Form-XX)    (Form-XX)      return
+
+In-app: live countdown cards from open filings + notification center.
+No email schedule exists.
 ```
 
 ---
@@ -233,10 +227,10 @@ Alert Schedule:         60d  30d  15d  7d  3d  1d
 ### 7.3 — Penalty Calculator in Platform
 
 The platform calculates and displays penalty exposure in:
-- **Dashboard:** Countdown banner with estimated penalty if deadline is missed.
-- **Email Alerts:** Every alert includes the specific penalty amount based on current balance.
-- **Free Audit Scorecard:** Registration gap penalty exposure estimate.
-- **Audit Reports:** Penalty accrual history and current outstanding amount.
+- **Dashboard:** Countdown cards show the statutory rate; overdue filings are badged.
+- **Simulator:** Illustrative 1%/mo estimate against a hypothetical due date (labeled as such).
+- **Free Audit Scorecard:** Registration gap penalty exposure estimate (heuristic).
+- **Audit Reports:** Filing and challan history (no accrued-penalty ledger exists).
 
 **Formula Displayed to User:**
 ```
@@ -261,7 +255,7 @@ Example:
 | **Data Minimization** | Section 6 | Only collect what is needed: worker ID, name, UAN, engagement dates, earnings. No unnecessary personal data. |
 | **Storage Limitation** | Section 8 | Retain data for statutory period (financial year + 7 years for audit) then schedule deletion |
 | **Accuracy** | Section 8(3) | Workers can request correction of their records |
-| **Security Safeguards** | Section 8(4) | AES-256 encryption for PII fields, access logging, RBAC |
+| **Security Safeguards** | Section 8(4) | Aadhaar masking, RLS tenant isolation, append-only audit logging. **Gap:** no field-level encryption (phones plaintext) |
 | **Consent** | Section 6 | Aggregator provides notice to workers that data is being processed for statutory compliance |
 | **Data Principal Rights** | Section 11–14 | Workers can request access to and correction of their data through the aggregator |
 
@@ -274,17 +268,17 @@ Example:
 | **No Aadhaar in logs** | UIDAI guidelines | Aadhaar is never written to log files, audit trails, or error messages |
 | **Use UAN as primary** | Ministry of Labour guidelines | 12-digit e-Shram UAN is the primary statutory identifier |
 
-### 8.3 — PII Encryption Specification
+### 8.3 — PII Handling Specification (as implemented)
 
-| Field | Sensitivity | Encryption | Storage |
+| Field | Sensitivity | Handling | Storage |
 |---|---|---|---|
 | `uan` | Low (statutory ID) | None (plaintext) | Indexed for search |
-| `maskedAadhaar` | Low (last 4 only) | None (already masked) | Display only |
-| `phone` | Medium | AES-256-GCM | `phoneEncrypted` column |
-| `bank_account` | High | AES-256-GCM | Encrypted column |
-| `bank_ifsc` | Medium | AES-256-GCM | Encrypted column |
+| `maskedAadhaar` | Low (last 4 only) | Masked at ingestion | Display only |
+| `phone` | Medium | **None — plaintext (known gap)** | `phone_encrypted` column (legacy name) |
 | `fullName` | Low | None (plaintext) | Indexed for search |
 | `workerInternalCode` | Low | None (plaintext) | Indexed for lookup |
+
+There are no bank-account/bank-IFSC columns and no encryption module. Do not represent otherwise.
 
 ---
 
@@ -320,14 +314,13 @@ This table tracks all relevant gazette notifications that affect platform config
 | Notification ID | Date | Subject | Impact on Platform | Status |
 |---|---|---|---|---|
 | S.O. xxxx(E) | 8 May 2026 | Social Security (Central) Rules, 2026 | Full platform scope — registration, filing, day-count rules | ✅ Active |
-| GSR-xxxx(E) | Pending | Section 114(6) — Category-specific contribution rates | `ContributionRateConfig` table update required | ⏳ Pending |
+| GSR-xxxx(E) | Pending | Section 114(6) — Category-specific contribution rates | Code change required (rates hardcoded; no config table) | ⏳ Pending |
 | GSR-xxxx(E) | Pending | Section 114 — Scheme notification for benefit categories | Worker benefit entitlement definitions | ⏳ Pending |
 
 **Update Procedure:**
 1. Monitor the Ministry of Labour & Employment gazette section weekly.
-2. When a new notification is published, update `ContributionRateConfig` via admin panel.
-3. All existing calculations are automatically recalculated using the new rates.
-4. Notify all affected aggregators via email about the rate change.
+2. When a new notification is published, update the hardcoded defaults and document the change.
+3. Notify all affected aggregators (no email dispatch exists — in-app notice only).
 
 ---
 

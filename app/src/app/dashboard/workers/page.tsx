@@ -10,12 +10,8 @@ import {
   CheckCircle2,
   Clock,
   XCircle,
-  Eye,
-  Filter,
-  ArrowUpDown,
-  ExternalLink,
 } from "lucide-react";
-import { WorkerRecord } from "@/lib/data-store";
+import { WorkerRecord } from "@/lib/types";
 
 export default function WorkersDirectoryPage() {
   const [workers, setWorkers] = useState<WorkerRecord[]>([]);
@@ -24,6 +20,28 @@ export default function WorkersDirectoryPage() {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [selectedWorker, setSelectedWorker] = useState<WorkerRecord | null>(null);
+  const [detail, setDetail] = useState<{
+    recentEngagementDays: { date: string; active: boolean; payout: number }[];
+    declarations: { id: string; platformName: string; daysReported: number }[];
+  } | null>(null);
+
+  async function openProfile(w: WorkerRecord) {
+    setSelectedWorker(w);
+    setDetail(null);
+    try {
+      const res = await fetch(`/api/v1/workers/${w.id}`);
+      const json = await res.json();
+      if (json.success) {
+        setDetail({
+          recentEngagementDays: json.data.recentEngagementDays || [],
+          declarations: json.data.declarations || [],
+        });
+      }
+    } catch (err) {
+      console.error("Worker detail load failed:", err);
+      // Activity panel stays hidden; core profile still renders.
+    }
+  }
 
   // Form states for Add Worker
   const [newWorker, setNewWorker] = useState({
@@ -37,28 +55,31 @@ export default function WorkersDirectoryPage() {
   });
   const [addError, setAddError] = useState("");
   const [addLoading, setAddLoading] = useState(false);
-
-  async function fetchWorkers() {
-    try {
-      const url = new URL("/api/v1/workers", window.location.origin);
-      if (search) url.searchParams.set("search", search);
-      if (statusFilter !== "ALL") url.searchParams.set("status", statusFilter);
-
-      const res = await fetch(url.toString());
-      const json = await res.json();
-      if (json.success) {
-        setWorkers(json.data.workers);
-      }
-    } catch {
-      // Fallback
-    } finally {
-      setLoading(false);
-    }
-  }
+  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
-    fetchWorkers();
-  }, [search, statusFilter]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const url = new URL("/api/v1/workers", window.location.origin);
+        if (search) url.searchParams.set("search", search);
+        if (statusFilter !== "ALL") url.searchParams.set("status", statusFilter);
+
+        const res = await fetch(url.toString());
+        const json = await res.json();
+        if (!cancelled && json.success) {
+          setWorkers(json.data.workers);
+        }
+      } catch (err) {
+        console.error("Workers load failed:", err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [search, statusFilter, refreshKey]);
 
   async function handleAddWorker(e: React.FormEvent) {
     e.preventDefault();
@@ -87,8 +108,9 @@ export default function WorkersDirectoryPage() {
         sector: "LOGISTICS_DELIVERY",
         state: "DELHI",
       });
-      fetchWorkers();
-    } catch {
+      setRefreshKey((k) => k + 1);
+    } catch (err) {
+      console.error("Add worker request failed:", err);
       setAddError("Network error adding worker");
     } finally {
       setAddLoading(false);
@@ -147,7 +169,7 @@ export default function WorkersDirectoryPage() {
           {[
             { id: "ALL", label: "All Workers" },
             { id: "ELIGIBLE", label: "Eligible (90d/120d)" },
-            { id: "APPROACHING", label: "Approaching (80-89d)" },
+            { id: "APPROACHING", label: "Approaching (75-89d)" },
             { id: "INACTIVE", label: "Inactive" },
           ].map((tab) => (
             <button
@@ -224,9 +246,9 @@ export default function WorkersDirectoryPage() {
                         <div className="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden">
                           <div
                             style={{ width: `${Math.min(100, (w.daysInLast90 / 90) * 100)}%` }}
-                            className={`h-full ${
-                              w.daysInLast90 >= 90 ? "bg-emerald-500" : w.daysInLast90 >= 80 ? "bg-amber-500" : "bg-slate-600"
-                            }`}
+                             className={`h-full ${
+                               w.daysInLast90 >= 90 ? "bg-emerald-500" : w.daysInLast90 >= 75 ? "bg-amber-500" : "bg-slate-600"
+                             }`}
                           />
                         </div>
                       </div>
@@ -250,7 +272,7 @@ export default function WorkersDirectoryPage() {
                       ) : w.status === "APPROACHING" ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-300 border border-amber-500/30">
                           <Clock className="w-3 h-3" />
-                          Approaching (80-89d)
+                          Approaching (75-89d)
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-800 text-slate-400">
@@ -262,7 +284,7 @@ export default function WorkersDirectoryPage() {
 
                     <td className="py-3 px-4 text-right">
                       <button
-                        onClick={() => setSelectedWorker(w)}
+                        onClick={() => openProfile(w)}
                         className="text-xs text-emerald-400 hover:text-emerald-300 font-medium px-2 py-1 rounded bg-emerald-500/10 hover:bg-emerald-500/20 transition"
                       >
                         Profile &rarr;
@@ -421,6 +443,32 @@ export default function WorkersDirectoryPage() {
                 <p className="text-slate-400 text-[11px]">
                   Worker has declared {selectedWorker.otherPlatformDays} days on other platforms, aggregated toward Section 114 statutory coverage.
                 </p>
+              </div>
+            )}
+
+            {detail && (
+              <div className="p-3 bg-slate-900 rounded-lg border border-slate-800 text-xs space-y-2">
+                <span className="font-semibold text-slate-200 block text-[11px]">
+                  Last 30 Days: {detail.recentEngagementDays.filter((h) => h.active).length} active days
+                </span>
+                <div className="flex gap-1">
+                  {detail.recentEngagementDays.slice(0, 30).reverse().map((h) => (
+                    <span
+                      key={h.date}
+                      title={`${h.date}${h.active ? ` — ₹${h.payout.toLocaleString("en-IN")}` : " — inactive"}`}
+                      className={`w-2.5 h-6 rounded-sm ${h.active ? "bg-emerald-500" : "bg-slate-800"}`}
+                    />
+                  ))}
+                </div>
+                {detail.declarations.length > 0 && (
+                  <div className="text-[11px] text-slate-400 space-y-0.5 pt-1">
+                    {detail.declarations.map((d) => (
+                      <p key={d.id}>
+                        {d.platformName}: <strong className="text-slate-200">{d.daysReported}d</strong> declared
+                      </p>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 

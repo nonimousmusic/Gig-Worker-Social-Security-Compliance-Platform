@@ -49,7 +49,8 @@ export default function RegisterPage() {
         return;
       }
       setSuccess(true);
-    } catch {
+    } catch (err) {
+      console.error("Registration request failed:", err);
       setError("Something went wrong. Please try again.");
       setLoading(false);
     }

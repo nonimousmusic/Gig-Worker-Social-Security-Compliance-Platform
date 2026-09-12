@@ -5,35 +5,35 @@ import Link from "next/link";
 import {
   Bell,
   Clock,
-  AlertTriangle,
   CheckCircle2,
   Calendar,
-  FileText,
   ExternalLink,
   Shield,
 } from "lucide-react";
-import { NotificationItem } from "@/lib/data-store";
+import { NotificationItem } from "@/lib/types";
 
 export default function AlertsNotificationsPage() {
   const [alerts, setAlerts] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(true);
 
-  async function loadAlerts() {
-    try {
-      const res = await fetch("/api/v1/notifications");
-      const json = await res.json();
-      if (json.success) {
-        setAlerts(json.data.notifications);
-      }
-    } catch {
-      // fallback
-    } finally {
-      setLoading(false);
-    }
-  }
-
   useEffect(() => {
-    loadAlerts();
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/v1/notifications");
+        const json = await res.json();
+        if (!cancelled && json.success) {
+          setAlerts(json.data.notifications);
+        }
+      } catch (err) {
+        console.error("Alerts load failed:", err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function handleMarkAllRead() {
@@ -42,7 +42,13 @@ export default function AlertsNotificationsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
-    loadAlerts();
+    try {
+      const res = await fetch("/api/v1/notifications");
+      const json = await res.json();
+      if (json.success) setAlerts(json.data.notifications);
+    } catch (err) {
+      console.error("Alerts reload failed:", err);
+    }
   }
 
   return (
@@ -55,7 +61,7 @@ export default function AlertsNotificationsPage() {
             Statutory Alerts & Compliance Notifications
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Automated statutory deadline warnings, worker 80-day threshold triggers, and regulatory gazette advisories.
+            Automated statutory deadline warnings, worker 75-day threshold triggers, and regulatory gazette advisories.
           </p>
         </div>
 

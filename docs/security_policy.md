@@ -1,9 +1,11 @@
 # Security Policy & DPDP Compliance
 ## Gig Worker Social Security Compliance Platform
 
-**Version:** 1.0  
-**Date:** 12 September 2026  
+**Version:** 2.0
+**Date:** 12 September 2026
 **Classification:** Internal — Engineering & Compliance Team
+
+> As-built posture. §5 contains an explicit known gap (plaintext phones) — do not present this document as claiming field-level encryption.
 
 ---
 
@@ -33,31 +35,28 @@
 │                                                                 │
 │  Layer 1: Network & Transport                                   │
 │  ├── TLS 1.3 (HTTPS only, HSTS enforced)                       │
-│  ├── Cloudflare WAF & DDoS protection                           │
-│  └── Rate limiting per endpoint category                        │
+│  └── Secrets in env, never in code or git                      │
 │                                                                 │
 │  Layer 2: Authentication & Identity                              │
-│  ├── JWT (RS256) with short-lived access tokens (1h)            │
-│  ├── Refresh token rotation                                     │
-│  ├── Work email domain verification                              │
-│  └── bcrypt password hashing (cost factor 12)                   │
+│  ├── Supabase Auth cookie sessions (no local passwords)         │
+│  ├── Session refresh in proxy.ts on every matched request       │
+│  ├── Work email domain gate at registration                     │
+│  └── Password policy enforced server-side (8+, A-Z, digit)      │
 │                                                                 │
-│  Layer 3: Authorization (RBAC)                                   │
-│  ├── Role-based access control (4 roles)                        │
-│  ├── Tenant isolation (org-scoped queries)                      │
-│  └── Delegated partner access with granular permissions         │
+│  Layer 3: Authorization                                          │
+│  ├── PostgreSQL RLS on every table (tenant USING/WITH CHECK)    │
+│  ├── Partner reads via can_access_org() grants                  │
+│  └── No role gates beyond authentication (known limitation)      │
 │                                                                 │
 │  Layer 4: Data Protection                                        │
-│  ├── Aadhaar masking pipeline (ingestion-level)                 │
-│  ├── AES-256-GCM field-level encryption for PII                │
-│  ├── No raw Aadhaar in any storage layer                        │
-│  └── Encrypted backups                                          │
+│  ├── Aadhaar masking pipeline (ingestion-level, enforced)       │
+│  ├── ⚠️ Phones stored PLAINTEXT (known gap, §5)                 │
+│  └── No raw Aadhaar in any storage layer                        │
 │                                                                 │
 │  Layer 5: Audit & Monitoring                                     │
-│  ├── Immutable audit log for all state changes                  │
+│  ├── Append-only audit_logs (no UPDATE/DELETE policies)         │
 │  ├── IP address and user agent tracking                          │
-│  ├── Sentry error monitoring                                     │
-│  └── Failed login attempt tracking                               │
+│  └── Audit write failures logged server-side                     │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -72,48 +71,49 @@
 |---|---|
 | Minimum length | 8 characters |
 | Complexity | At least 1 uppercase letter, 1 digit |
-| Hashing algorithm | bcrypt with cost factor 12 |
-| Storage | `passwordHash` column only — raw passwords never stored |
-| Failed login lockout | 5 failed attempts → 15-minute lockout |
-| Password reset | Token-based, expires in 1 hour |
+| Hashing | Supabase Auth (server-side; no local hash column) |
+| Storage | `auth.users` managed by Supabase — raw passwords never touch app code |
+| Failed login lockout | Not implemented (Supabase default protections apply) |
+| Password reset | Not implemented (no reset flow exists) |
 
-### 2.2 — JWT Token Specification
+### 2.2 — Session Specification
 
 | Parameter | Value |
 |---|---|
-| Algorithm | HS256 (HMAC-SHA256) |
-| Access token expiry | 1 hour |
-| Refresh token expiry | 7 days |
-| Token payload | `{ userId, organizationId, role, iat, exp }` |
-| Refresh rotation | New refresh token issued on each refresh; old token invalidated |
+| Mechanism | Supabase Auth cookies (`sb-*`), refreshed in `src/proxy.ts` |
+| Login | Browser `supabase.auth.signInWithPassword` (no login API route) |
+| Logout | Browser `supabase.auth.signOut()` (no logout API route) |
+| Server resolution | `getSessionData()`: `auth.users → profiles → organizations` |
+| Registration | Service-role `auth.admin.createUser` with `email_confirm: true` (no verification email) |
 
-### 2.3 — Role-Based Access Control (RBAC)
+### 2.3 — Roles (declared, not enforced)
 
-| Role | Description | Scope |
-|---|---|---|
-| `ORG_ADMIN` | Full organization management | All operations |
-| `OPS_MANAGER` | Worker and roster management | Workers, uploads, dashboard |
-| `FINANCE_LEAD` | Financial data and filing management | Filings, calculator, challans |
-| `EXTERNAL_ADVISOR` | Delegated partner access | Per `PartnerClientAccess.accessLevel` |
+| Role | Intended Scope |
+|---|---|
+| `ORG_ADMIN` | Full organization management (registration default) |
+| `OPS_MANAGER` | Worker and roster management |
+| `FINANCE_LEAD` | Financial data and filing management |
+| `EXTERNAL_ADVISOR` | Delegated partner access |
+
+> No route checks roles today — every data route enforces authentication + tenant scope only. Partner `access_level` is read, never enforced. Treat role-gated UI copy as aspirational.
 
 ### 2.4 — Tenant Isolation
 
-Every database query MUST be scoped to the authenticated user's `organizationId`:
+Enforcement is two-deep: application scoping **plus** database RLS.
 
 ```typescript
-// ✅ CORRECT: Always scope queries to organization
-const workers = await prisma.worker.findMany({
-  where: { organizationId: session.organizationId }
-});
-
-// ❌ WRONG: Never allow unscoped queries
-const workers = await prisma.worker.findMany({
-  where: { id: workerId }  // Missing org scope!
-});
+// Every data route starts here — no session, no data
+const tenant = await requireTenant(); // getSessionData() or 401
+// ...then filters organization_id = tenant.organizationId
 ```
 
-**Partner context switching:**
-When an advisor switches to a client context, all subsequent queries use the `clientOrganizationId` from `PartnerClientAccess`, validated against the partner's permissions.
+```sql
+-- And the database enforces it independently, e.g.:
+CREATE POLICY "workers_select_tenant" ON public.workers
+  FOR SELECT TO authenticated USING (public.can_access_org(organization_id));
+```
+
+Partner reads pass through `can_access_org()` (own org **or** an unrevoked `partner_client_access` grant). There is no client-impersonation endpoint, so cross-tenant reads require a live grant row.
 
 ---
 
@@ -121,10 +121,12 @@ When an advisor switches to a client context, all subsequent queries use the `cl
 
 | Classification | Description | Examples | Storage Policy |
 |---|---|---|---|
-| **RESTRICTED** | Data that must never be stored in raw form | Raw 12-digit Aadhaar numbers | Masked at ingestion, never persisted |
-| **CONFIDENTIAL** | Sensitive PII requiring encryption | Phone numbers, bank account details | AES-256-GCM encrypted at rest |
-| **INTERNAL** | Business data within tenant scope | Worker names, earnings, day counts | Plaintext, tenant-isolated |
+| **RESTRICTED** | Must never be stored raw | Raw 12-digit Aadhaar numbers | Masked at ingestion, never persisted |
+| **CONFIDENTIAL** | Sensitive PII | Phone numbers | ⚠️ **Plaintext** in `phone_encrypted` (known gap — §5) |
+| **INTERNAL** | Business data within tenant scope | Worker names, earnings, day counts | Plaintext, tenant-isolated via RLS |
 | **PUBLIC** | Non-sensitive identifiers | e-Shram UAN, worker internal codes | Plaintext, indexed |
+
+There are no bank-account/bank-IFSC columns anywhere in the schema.
 
 ---
 
@@ -134,13 +136,11 @@ When an advisor switches to a client context, all subsequent queries use the `cl
 
 | Action | Status | Enforcement |
 |---|---|---|
-| Store raw 12-digit Aadhaar in database | ❌ **PROHIBITED** | Ingestion parser blocks persistence |
-| Display full Aadhaar in UI | ❌ **PROHIBITED** | Only `XXXX-XXXX-1234` format allowed |
-| Log Aadhaar in application logs | ❌ **PROHIBITED** | Log sanitizer strips numeric sequences |
-| Include Aadhaar in error messages | ❌ **PROHIBITED** | Error handlers redact PII |
-| Email Aadhaar to any recipient | ❌ **PROHIBITED** | Email templates have no Aadhaar fields |
-| Include raw Aadhaar in audit logs | ❌ **PROHIBITED** | Audit logger receives only masked values |
-| Export raw Aadhaar in CSV/PDF reports | ❌ **PROHIBITED** | Export engine uses `maskedAadhaar` only |
+| Store raw 12-digit Aadhaar in database | ❌ **PROHIBITED** | Server-side masking before insert |
+| Display full Aadhaar in UI | ❌ **PROHIBITED** | Only `XXXX-XXXX-1234` rendered |
+| Log Aadhaar in application logs | ❌ **PROHIBITED** | `sanitizeLogMessage` helper available |
+| Include Aadhaar in error messages | ❌ **PROHIBITED** | Error paths never echo inputs |
+| Export raw Aadhaar in CSV reports | ❌ **PROHIBITED** | Export uses `maskedAadhaar` only |
 
 ### 4.2 — Masking Pipeline
 
@@ -149,18 +149,8 @@ Input: "2345 6789 1234" or "234567891234"
                     │
                     ▼
          ┌──────────────────┐
-         │  Regex Detection  │  Pattern: ^[2-9]\d{3}\s?\d{4}\s?\d{4}$
-         └────────┬─────────┘
-                  │
-                  ▼
-         ┌──────────────────┐
-         │  Strip Whitespace │  "234567891234"
-         └────────┬─────────┘
-                  │
-                  ▼
-         ┌──────────────────┐
-         │  Extract Last 4   │  "1234"
-         └────────┬─────────┘
+         │  Regex + length   │  ^[2-9]\d{11}$ (worker create)
+         └────────┬─────────┘  last-4 slice (CSV path)
                   │
                   ▼
          ┌──────────────────┐
@@ -169,185 +159,100 @@ Input: "2345 6789 1234" or "234567891234"
                   │
                   ▼
          ┌──────────────────┐
-         │  Persist to DB    │  maskedAadhaar = "XXXX-XXXX-1234"
-         └────────┬─────────┘
-                  │
-                  ▼
-         ┌──────────────────┐
-         │  Clear Raw Buffer │  Zero-fill memory buffer
-         └──────────────────┘
+         │  Persist masked   │  masked_aadhaar = "XXXX-XXXX-1234"
+         └──────────────────┘  (raw value never stored)
 ```
 
 ### 4.3 — Implementation Reference
 
 ```typescript
-// src/lib/aadhaar-masking.ts
-
-const AADHAAR_REGEX = /^[2-9]\d{3}\s?\d{4}\s?\d{4}$/;
-
-export function maskAadhaar(rawInput: string): string | null {
-  const cleaned = rawInput.replace(/\s/g, '');
-  
-  if (!AADHAAR_REGEX.test(rawInput)) {
-    return null; // Not a valid Aadhaar format
-  }
-  
-  const lastFour = cleaned.slice(-4);
-  return `XXXX-XXXX-${lastFour}`;
-}
-
-export function containsRawAadhaar(text: string): boolean {
-  // Detect any 12-digit number that could be Aadhaar
-  return /[2-9]\d{3}\s?\d{4}\s?\d{4}/.test(text);
-}
-
-export function sanitizeLogMessage(message: string): string {
-  // Replace any potential Aadhaar-like sequences in log messages
-  return message.replace(/[2-9]\d{3}\s?\d{4}\s?\d{4}/g, 'XXXX-XXXX-XXXX');
-}
+// src/lib/aadhaar-masking.ts (as implemented)
+export function maskAadhaar(rawInput: string): string | null; // regex-gated, last-4
+export function containsRawAadhaar(text: string): boolean;
+export function sanitizeLogMessage(message: string): string;  // masks Aadhaar-like runs
+export function validateUAN(uan: string): boolean;
 ```
 
 ---
 
 ## 5. Encryption Standards
 
-### 5.1 — Field-Level Encryption
+### 5.1 — Field-Level Encryption: NOT IMPLEMENTED (known gap)
 
-| Specification | Value |
+| Specification | Status |
 |---|---|
-| Algorithm | AES-256-GCM |
-| Key length | 256 bits (32 bytes) |
-| IV (Initialization Vector) | 12 bytes, unique per encryption |
-| Auth tag | 16 bytes |
-| Key storage | Environment variable (`ENCRYPTION_KEY`) |
-| Key format | 64-character hex string |
+| Algorithm | None deployed |
+| Phone storage | **Plaintext** in `workers.phone_encrypted` (column name is a legacy misnomer) |
+| Bank data | No bank columns exist |
+| Key management | N/A — there is no `ENCRYPTION_KEY` and no crypto module |
 
-### 5.2 — Encrypted Field Storage Format
+Remediation options (pick one, then update this section): (a) wire AES-256-GCM via KMS-backed key for `phone_encrypted` + backfill, or (b) stop collecting phones. Until then, do not claim field-level encryption to customers or auditors.
 
-```
-[12-byte IV][ciphertext][16-byte auth tag]
-```
-
-All stored as a single base64-encoded string in the database column.
-
-### 5.3 — Implementation Reference
-
-```typescript
-// src/lib/encryption.ts
-
-import crypto from 'crypto';
-
-const ALGORITHM = 'aes-256-gcm';
-const IV_LENGTH = 12;
-const AUTH_TAG_LENGTH = 16;
-
-export function encrypt(plaintext: string, key: Buffer): string {
-  const iv = crypto.randomBytes(IV_LENGTH);
-  const cipher = crypto.createCipheriv(ALGORITHM, key, iv);
-  
-  const encrypted = Buffer.concat([
-    cipher.update(plaintext, 'utf8'),
-    cipher.final()
-  ]);
-  
-  const authTag = cipher.getAuthTag();
-  
-  return Buffer.concat([iv, encrypted, authTag]).toString('base64');
-}
-
-export function decrypt(ciphertext: string, key: Buffer): string {
-  const buffer = Buffer.from(ciphertext, 'base64');
-  
-  const iv = buffer.subarray(0, IV_LENGTH);
-  const authTag = buffer.subarray(buffer.length - AUTH_TAG_LENGTH);
-  const encrypted = buffer.subarray(IV_LENGTH, buffer.length - AUTH_TAG_LENGTH);
-  
-  const decipher = crypto.createDecipheriv(ALGORITHM, key, iv);
-  decipher.setAuthTag(authTag);
-  
-  return decipher.update(encrypted) + decipher.final('utf8');
-}
-```
-
-### 5.4 — Data at Rest
+### 5.2 — Data at Rest
 
 | Layer | Encryption |
 |---|---|
-| PostgreSQL database | Cloud provider disk encryption (AES-256) |
-| Database backups | Encrypted before storage |
-| File uploads (S3/R2) | Server-side encryption (SSE-S3 or SSE-KMS) |
+| PostgreSQL database | Cloud provider disk encryption (Supabase-managed) |
+| Database backups | Provider-managed |
 | Application secrets | Environment variables, never in code or version control |
 
-### 5.5 — Data in Transit
+Provider disk encryption is **not** a substitute for §5.1.
+
+### 5.3 — Data in Transit
 
 | Connection | Protocol |
 |---|---|
-| Client ↔ Server | TLS 1.3 (HTTPS only, HSTS max-age=31536000) |
-| Server ↔ Database | SSL required (`?sslmode=require` in connection string) |
-| Server ↔ Email provider | TLS (API over HTTPS) |
-| Server ↔ File storage | TLS (API over HTTPS) |
+| Client ↔ Server | TLS (HTTPS) |
+| Server ↔ Supabase | TLS (HTTPS API + pooled Postgres SSL) |
 
 ---
 
 ## 6. API Security
 
-### 6.1 — Rate Limiting
+### 6.1 — Rate Limiting (minimal, in-memory)
 
-| Endpoint Category | Limit | Window | Response on Exceed |
+| Endpoint | Limit | Window | Response on Exceed |
 |---|---|---|---|
-| Authentication | 10 requests | 1 minute | `429 RATE_LIMITED` |
-| CSV Upload / Ingestion | 5 requests | 1 minute | `429 RATE_LIMITED` |
-| PDF Generation | 3 requests | 1 minute | `429 RATE_LIMITED` |
-| General API (authenticated) | 100 requests | 1 minute | `429 RATE_LIMITED` |
-| Free Audit (public) | 3 requests | 1 minute | `429 RATE_LIMITED` |
+| `POST /auth/register` | 10 requests | 1 minute / IP | `429 RATE_LIMITED` |
+| `POST /free-audit` | 5 requests | 1 minute / IP | `429 RATE_LIMITED` |
+| `POST /ledger/upload` | 10 requests | 1 minute / IP | `429 RATE_LIMITED` |
+
+Enforced in `src/proxy.ts` with an in-memory fixed window: counters reset on redeploy and are not shared across instances. Move to Redis/Upstash before relying on it in multi-instance production. Authenticated data routes are not limited.
 
 ### 6.2 — Input Validation
 
-- All request bodies validated with **Zod schemas** before processing.
-- SQL injection: Prevented by Prisma ORM parameterized queries (no raw SQL).
-- XSS: React auto-escaping + Content-Security-Policy headers.
-- CSRF: SameSite cookie attribute + origin validation.
-- File uploads: Content-type validation, size limits, virus scanning (future).
+- Request bodies are validated inline per route (required fields, 12-digit Aadhaar, non-negative days, sector enum, filing status enum). There is no Zod layer.
+- SQL injection: all access goes through Supabase `supabase-js` parameterization — no raw SQL in app code; RLS bounds every row.
+- XSS: React auto-escaping. No custom CSP headers are set.
+- CSRF: Supabase `sb-*` cookies are HttpOnly; mutating routes should still add origin checks before handling real money-adjacent traffic.
+- File uploads: CSV only (`accept=".csv"` + PapaParse validation); no virus scanning; no size cap enforced server-side.
 
 ### 6.3 — Security Headers
 
-```typescript
-// Next.js middleware
-const securityHeaders = {
-  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
-  'X-Content-Type-Options': 'nosniff',
-  'X-Frame-Options': 'DENY',
-  'X-XSS-Protection': '1; mode=block',
-  'Referrer-Policy': 'strict-origin-when-cross-origin',
-  'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';",
-  'Permissions-Policy': 'camera=(), microphone=(), geolocation=()'
-};
-```
+Set for all routes in `next.config.ts`: `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy: camera=(), microphone=(), geolocation=()`, `Strict-Transport-Security: max-age=31536000; includeSubDomains`. No custom CSP is configured (Supabase Auth/storage touch multiple HTTPS origins — add one deliberately after testing login + upload, not by default).
 
 ### 6.4 — Internal Endpoint Protection
 
-Cron endpoints (`/api/v1/internal/cron/*`) are secured by:
+One scheduled endpoint exists: `POST /api/v1/cron/evaluate-eligibility`.
 
-1. `X-Cron-Secret` header matching the `CRON_SECRET` environment variable.
-2. Reject requests without the correct secret with `401 Unauthorized`.
-3. Log all cron executions to `AuditLog`.
+1. Scheduler mode: `Authorization: Bearer <CRON_SECRET>` (global run).
+2. Dashboard mode: caller Supabase session (org-scoped run).
+3. Missing/invalid credentials in production → `401`.
+4. Every run writes per-org `CRON_ELIGIBILITY_EVALUATED` audit rows.
 
 ---
 
 ## 7. Audit Logging Policy
 
-### 7.1 — Events That Must Be Logged
+### 7.1 — Events That Are Logged
 
-| Event Category | Specific Events |
+| Event Category | Actual Events |
 |---|---|
-| **Authentication** | Login success, login failure, password reset, email verification |
-| **Data Ingestion** | CSV upload, batch import completion, parsing errors |
-| **Worker Management** | Worker created, updated, exited, declaration submitted |
-| **Filing Operations** | Filing created, PDF generated, challan uploaded, filing locked |
-| **Access Control** | Role changed, user invited, partner access granted/revoked |
-| **Export Operations** | Audit report generated, CSV exported |
-| **System Operations** | Cron execution, eligibility recalculation, rate config update |
-| **Partner Operations** | Client context switched, partner data accessed |
+| **Data Ingestion** | `CSV_DAILY_LEDGER_INGESTED`, `CSV_BACKFILL_INGESTED` (with row counts + failures) |
+| **Worker Management** | Declaration recorded (via `CRON_ELIGIBILITY_EVALUATED` transitions); worker create/update rely on row timestamps |
+| **Filing Operations** | `FILING_DRAFT_CREATED`, `FILING_DRAFT_UPDATED`, `CHALLAN_LOCKED_AUDIT_PROOF` |
+| **System Operations** | `CRON_ELIGIBILITY_EVALUATED` per org |
+| **Not logged** | Logins, logouts, password events, exports, reads, role changes, invites (no such flows exist) |
 
 ### 7.2 — Audit Log Entry Structure
 
@@ -355,47 +260,44 @@ Cron endpoints (`/api/v1/internal/cron/*`) are secured by:
 {
   "id": "uuid",
   "organizationId": "uuid",
-  "userId": "uuid",
-  "action": "CHALLAN_LOCKED",
-  "entityType": "FilingRecord",
-  "entityId": "filing-uuid",
-  "detailsJson": {
-    "before": { "status": "CHALLAN_DEPOSITED" },
-    "after": { "status": "FILED_LOCKED", "lockedHashSha256": "abc123..." }
-  },
-  "ipAddress": "103.21.58.xxx",
-  "userAgent": "Mozilla/5.0...",
-  "createdAt": "2026-10-28T14:30:00.000Z"
+  "actorEmail": "ops@quickdrop.in",
+  "action": "CHALLAN_LOCKED_AUDIT_PROOF",
+  "entityType": "Challan",
+  "entityId": "uuid",
+  "detailsJson": { "filingId": "uuid", "challanNumber": "...", "sha256Hash": "..." },
+  "ipAddress": null,
+  "userAgent": null,
+  "createdAt": "2026-09-12T10:30:00.000Z"
 }
 ```
 
+Notes: `actor_email` (not `userId` FK — `profile_id` is separate and nullable); no before/after diff envelope; `ipAddress`/`userAgent` are null unless the caller supplies them (no route currently does).
+
 ### 7.3 — Log Integrity
 
-- Audit logs are **append-only** — no UPDATE or DELETE operations permitted.
-- Database user for the application has no DELETE permission on the `AuditLog` table.
-- Periodic integrity checks: Hash chain verification on audit log sequences.
+- Append-only by RLS design: `audit_logs` has INSERT policies (`authenticated` own-org, `service_role`) and **no** UPDATE/DELETE policies — denial is structural, not GRANT-based.
+- No hash chain exists. `logAuditEvent` failures are `console.error`-logged server-side and never break the request (audit has holes-by-design on DB outage — monitor logs).
 
 ---
 
 ## 8. Data Retention & Deletion
 
-### 8.1 — Retention Periods
+### 8.1 — Retention Periods (policy targets; no automated enforcement exists)
 
 | Data Category | Retention Period | Legal Basis |
 |---|---|---|
-| Worker engagement records | FY + 8 years | Income Tax Act (7-year record retention) + 1 year buffer |
+| Worker engagement records | FY + 8 years | Income Tax Act (7-year) + 1 year buffer |
 | Filing records & challans | FY + 8 years | Same as above |
 | Audit logs | FY + 8 years | Compliance audit requirement |
 | Notification logs | 2 years | Operational reference |
-| Uploaded CSV files | 90 days after processing | Temporary ingestion artifacts |
-| Generated PDF reports | 1 year | Download window |
-| Free audit trial data | 90 days if not converted | Lead-gen cleanup |
+| Marketing leads (`audit_leads`) | Until converted or deletion requested | Lead-gen purpose limitation |
+
+> No cleanup cron, no report-expiry, and no uploaded-file retention flow exist (uploads are parsed in memory, never stored). The table above is the target, not the implementation.
 
 ### 8.2 — Deletion Procedures
 
-- **Worker Data Deletion Request:** Under DPDP Act Section 12, a data principal can request erasure. The platform flags the request and notifies the aggregator admin, who must confirm. Statutory data required for compliance is retained with a legal retention notice; non-essential PII is purged.
-- **Account Deletion:** On account closure, all organization data is scheduled for deletion after the statutory retention period expires.
-- **Automated Cleanup:** A weekly cron job removes expired temporary files (uploaded CSVs past 90 days, expired report download links).
+- **Worker Data Deletion Request:** DPDP Act Section 12 flow is manual today — flag to the aggregator admin; statutory data is retained with legal notice.
+- **Account Deletion:** manual (service role) — no self-serve closure flow exists.
 
 ---
 
@@ -405,18 +307,18 @@ Cron endpoints (`/api/v1/internal/cron/*`) are secured by:
 |---|---|---|---|---|
 | 1 | Lawful purpose for processing | Section 4 | ✅ Implemented | Statutory compliance under Code on Social Security |
 | 2 | Purpose limitation | Section 5 | ✅ Implemented | Data used only for compliance calculations |
-| 3 | Data minimization | Section 6 | ✅ Implemented | Only collect necessary fields |
-| 4 | Consent / notice | Section 6(1) | 🔲 Aggregator responsibility | Platform provides notice template for aggregators to share with workers |
-| 5 | Accuracy obligation | Section 8(3) | ✅ Implemented | Workers can request correction via aggregator |
-| 6 | Storage limitation | Section 8 | ✅ Implemented | Retention policy with automated cleanup |
-| 7 | Security safeguards | Section 8(4) | ✅ Implemented | AES-256 encryption, access controls, audit logging |
+| 3 | Data minimization | Section 6 | ✅ Implemented | Only operational fields collected |
+| 4 | Consent / notice | Section 6(1) | 🔲 Aggregator responsibility | No notice template ships with the product |
+| 5 | Accuracy obligation | Section 8(3) | ✅ Implemented | Worker PATCH endpoints |
+| 6 | Storage limitation | Section 8 | ⚠️ Partial | Retention targets set (§8) but no automated cleanup |
+| 7 | Security safeguards | Section 8(4) | ⚠️ Partial | RLS + audit logging real; **field encryption missing (§5.1)** |
 | 8 | Data breach notification | Section 8(6) | 🔲 Policy drafted | 72-hour notification to Data Protection Board |
-| 9 | Right to access | Section 11 | ✅ Implemented | Data export API |
+| 9 | Right to access | Section 11 | ✅ Implemented | Workers CSV export |
 | 10 | Right to correction | Section 12 | ✅ Implemented | Worker update endpoints |
-| 11 | Right to erasure | Section 12 | ⚠️ Partial | Non-statutory data erasable; statutory data retained with legal notice |
+| 11 | Right to erasure | Section 12 | ⚠️ Partial | Manual flow; statutory data retained with legal notice |
 | 12 | Right to grievance redressal | Section 13 | 🔲 Policy drafted | Grievance officer designation pending |
-| 13 | Cross-border data transfer | Section 16 | ✅ N/A for MVP | All data stored in India (ap-south-1 region) |
-| 14 | Significant data fiduciary | Section 10 | 🔲 Assessment pending | May apply if platform crosses processing volume thresholds |
+| 13 | Cross-border data transfer | Section 16 | ✅ N/A | Supabase project region is the deployment decision — pin it to India |
+| 14 | Significant data fiduciary | Section 10 | 🔲 Assessment pending | May apply at volume thresholds |
 
 ---
 
@@ -426,15 +328,15 @@ Cron endpoints (`/api/v1/internal/cron/*`) are secured by:
 
 | Severity | Description | Response Time | Examples |
 |---|---|---|---|
-| **P0 — Critical** | Data breach, PII exposure, service outage affecting filing deadlines | Immediate (within 1 hour) | Aadhaar leak, database compromise, missed deadline alert failure |
-| **P1 — High** | Security vulnerability, partial service degradation | Within 4 hours | XSS/injection discovery, elevated access without authorization |
-| **P2 — Medium** | Non-critical vulnerability, performance degradation | Within 24 hours | Rate limiting bypass, minor access control gap |
-| **P3 — Low** | Informational security finding, hardening opportunity | Within 1 week | Missing security header, dependency with known low-severity CVE |
+| **P0 — Critical** | Data breach, PII exposure, service outage affecting filing deadlines | Immediate (within 1 hour) | Aadhaar leak, service-role key compromise, missed deadline alert failure |
+| **P1 — High** | Security vulnerability, partial service degradation | Within 4 hours | RLS policy gap, elevated access without authorization |
+| **P2 — Medium** | Non-critical vulnerability, performance degradation | Within 24 hours | Missing security header, minor access control gap |
+| **P3 — Low** | Informational security finding, hardening opportunity | Within 1 week | Dependency with known low-severity CVE |
 
 ### 10.2 — Data Breach Response Protocol
 
 1. **Detection** (T+0): Automated alert or manual discovery.
-2. **Containment** (T+1h): Isolate affected systems, revoke compromised credentials.
+2. **Containment** (T+1h): Isolate affected systems, revoke compromised credentials — **rotate `SUPABASE_SERVICE_ROLE_KEY` first** (it bypasses all RLS).
 3. **Assessment** (T+4h): Determine scope of data exposed, affected organizations.
 4. **Notification** (T+72h max):
    - Notify Data Protection Board of India (DPDP Act Section 8(6)).
@@ -452,8 +354,7 @@ Cron endpoints (`/api/v1/internal/cron/*`) are secured by:
 | Component | Security Measure |
 |---|---|
 | **Hosting (Vercel)** | SOC 2 Type II certified, automatic TLS |
-| **Database (Supabase/Neon)** | Encrypted at rest, SSL connections, automated backups |
-| **File Storage (S3/R2)** | Server-side encryption, private bucket ACLs |
+| **Database + Auth (Supabase)** | Encrypted at rest, SSL connections, automated backups |
 | **DNS (Cloudflare)** | WAF, DDoS protection, DNSSEC |
 | **Secrets Management** | Environment variables, never in code or git |
 
@@ -461,10 +362,10 @@ Cron endpoints (`/api/v1/internal/cron/*`) are secured by:
 
 | Role | Database Access | Server Access | Secrets Access |
 |---|---|---|---|
-| Developer | Prisma Studio (dev only) | Vercel dashboard | `.env.local` only |
-| DevOps / SRE | Read-only production DB | Vercel + infra dashboards | Production secrets |
+| Developer | Supabase Dashboard (dev project) | Vercel dashboard | `.env.local` only |
+| DevOps / SRE | Supabase Dashboard (read-only prod) | Vercel + infra dashboards | Production secrets |
 | CTO / Founder | Full access | All systems | All secrets |
-| Application code | Prisma client (scoped) | N/A | `process.env` |
+| Application code | Anon key (RLS-bound) + service role (register/cron/seed only) | N/A | `process.env` (server) |
 
 ---
 
@@ -474,18 +375,17 @@ Cron endpoints (`/api/v1/internal/cron/*`) are secured by:
 
 - Run `npm audit` before every deployment.
 - No dependencies with known critical or high CVEs in production.
-- Pin major versions in `package.json` to prevent unexpected breaking changes.
-- Review dependency changelogs before upgrading.
+- Major versions are caret-pinned in `package.json`; review changelogs before upgrading.
 
 ### 12.2 — Key Dependencies & Security Posture
 
 | Dependency | Purpose | Security Notes |
 |---|---|---|
 | `next` | Application framework | Regular security patches from Vercel |
-| `prisma` | ORM | Parameterized queries prevent SQL injection |
-| `bcryptjs` | Password hashing | Industry-standard, constant-time comparison |
-| `jsonwebtoken` | JWT handling | Verify with correct algorithm to prevent `alg: none` attacks |
-| `zod` | Input validation | Runtime type checking prevents invalid data processing |
-| `puppeteer` | PDF generation | Runs in sandboxed Chromium, no untrusted input rendering |
-| `papaparse` | CSV parsing | Handles malformed CSV safely |
-| `resend` / `@aws-sdk/client-ses` | Email | API keys rotated quarterly |
+| `react` / `react-dom` | UI runtime | Auto-escaping mitigates XSS |
+| `@supabase/ssr` + `@supabase/supabase-js` | Auth + data access | Cookie sessions; RLS enforced server-side; **service-role key must never reach the browser** |
+| `papaparse` | CSV parsing | Handles malformed CSV safely; uploads parsed in memory, never stored |
+| `lucide-react` | Icons | No security surface |
+| `next/font` | Font loading | Self-hosted fonts, no third-party stylesheet |
+
+> Removed since v1.0 of this doc: `prisma`, `bcryptjs`, `jsonwebtoken`, `zod`, `puppeteer`, `resend`/`aws-ses`, Radix UI, `clsx`, `class-variance-authority` — none are installed or referenced.

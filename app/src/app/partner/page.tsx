@@ -4,14 +4,8 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import {
   Briefcase,
-  Building2,
-  Users,
-  ShieldCheck,
-  AlertTriangle,
   ArrowRight,
-  ExternalLink,
   ChevronRight,
-  Shield,
   Search,
 } from "lucide-react";
 
@@ -22,14 +16,15 @@ interface PartnerClient {
   cin: string;
   activeWorkers: number;
   eligibleWorkers: number;
-  nextFilingDue: string;
+  nextFilingDue: string | null;
   complianceStatus: "COMPLIANT" | "ATTENTION_REQUIRED" | "OVERDUE";
   riskScore: number;
-  cessLiabilityQ2: number;
+  openCessLiability: number;
 }
 
 export default function AdvisoryPartnerPortalPage() {
   const [clients, setClients] = useState<PartnerClient[]>([]);
+  const [partnerFirm, setPartnerFirm] = useState("Advisory Portal");
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
 
@@ -40,9 +35,10 @@ export default function AdvisoryPartnerPortalPage() {
         const json = await res.json();
         if (json.success) {
           setClients(json.data.clients);
+          if (json.data.partnerFirm) setPartnerFirm(json.data.partnerFirm);
         }
-      } catch {
-        // Handled gracefully
+      } catch (err) {
+        console.error("Partner clients load failed:", err);
       } finally {
         setLoading(false);
       }
@@ -54,6 +50,11 @@ export default function AdvisoryPartnerPortalPage() {
     c.legalName.toLowerCase().includes(search.toLowerCase()) ||
     c.sector.toLowerCase().includes(search.toLowerCase())
   );
+
+  const totalWorkers = clients.reduce((s, c) => s + c.activeWorkers, 0);
+  const totalEligible = clients.reduce((s, c) => s + c.eligibleWorkers, 0);
+  const totalOpenLiability = clients.reduce((s, c) => s + c.openCessLiability, 0);
+  const dueCount = clients.filter((c) => c.nextFilingDue).length;
 
   return (
     <div className="min-h-screen bg-[#0B0F17] text-slate-100 font-sans p-6 md:p-10">
@@ -67,7 +68,7 @@ export default function AdvisoryPartnerPortalPage() {
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-xl font-bold text-white tracking-tight">
-                  Singhania & Partners LLP — Advisory Portal
+                  {partnerFirm} — Advisory Portal
                 </h1>
                 <span className="text-[10px] px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-300 border border-indigo-500/30">
                   Labour Law Advisory
@@ -89,27 +90,35 @@ export default function AdvisoryPartnerPortalPage() {
           </div>
         </div>
 
-        {/* Aggregated Overview KPI Bar */}
+        {/* Aggregated Overview KPI Bar (computed from live client data) */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <div className="bg-[#111622] p-5 rounded-xl border border-slate-800">
             <span className="text-xs text-slate-400">Total Retained Clients</span>
-            <p className="text-2xl font-bold text-white mt-1">3 Aggregators</p>
-            <span className="text-[10px] text-slate-500">Logistics, Mobility, Food</span>
+            <p className="text-2xl font-bold text-white mt-1">
+              {loading ? "…" : `${clients.length} Aggregator${clients.length === 1 ? "" : "s"}`}
+            </p>
+            <span className="text-[10px] text-slate-500">Across granted organizations</span>
           </div>
           <div className="bg-[#111622] p-5 rounded-xl border border-slate-800">
             <span className="text-xs text-slate-400">Aggregated Workforce</span>
-            <p className="text-2xl font-bold text-white mt-1">6,000 Gig Workers</p>
-            <span className="text-[10px] text-emerald-400">4,540 Statutory Eligible</span>
+            <p className="text-2xl font-bold text-white mt-1">
+              {loading ? "…" : `${totalWorkers.toLocaleString("en-IN")} Gig Workers`}
+            </p>
+            <span className="text-[10px] text-emerald-400">{totalEligible.toLocaleString("en-IN")} Statutory Eligible</span>
           </div>
           <div className="bg-[#111622] p-5 rounded-xl border border-slate-800">
-            <span className="text-xs text-slate-400">Total Q2 Cess Monitored</span>
-            <p className="text-2xl font-bold text-emerald-400 mt-1 font-mono">₹17.42 Lakh</p>
-            <span className="text-[10px] text-slate-500">All under 5% payout cap</span>
+            <span className="text-xs text-slate-400">Total Open Cess Monitored</span>
+            <p className="text-2xl font-bold text-emerald-400 mt-1 font-mono">
+              {loading ? "…" : `₹${(totalOpenLiability / 100000).toFixed(2)} Lakh`}
+            </p>
+            <span className="text-[10px] text-slate-500">Unpaid filings across clients</span>
           </div>
           <div className="bg-[#111622] p-5 rounded-xl border border-amber-500/20">
-            <span className="text-xs text-slate-400">Upcoming Oct 31 Filings</span>
-            <p className="text-2xl font-bold text-amber-300 mt-1">3 Filings Due</p>
-            <span className="text-[10px] text-amber-400">49 days remaining</span>
+            <span className="text-xs text-slate-400">Clients With Filings Due</span>
+            <p className="text-2xl font-bold text-amber-300 mt-1">
+              {loading ? "…" : `${dueCount} Due`}
+            </p>
+            <span className="text-[10px] text-amber-400">Open statutory filings</span>
           </div>
         </div>
 
@@ -129,6 +138,13 @@ export default function AdvisoryPartnerPortalPage() {
         </div>
 
         {/* Client Cards Grid */}
+        {loading ? (
+          <p className="text-center py-8 text-slate-500 text-xs">Loading client portfolio...</p>
+        ) : filtered.length === 0 ? (
+          <div className="p-8 text-center text-slate-500 text-xs bg-[#111622] rounded-xl border border-slate-800">
+            No client organizations granted yet. Partner access is configured via the partner_client_access table.
+          </div>
+        ) : (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {filtered.map((client) => (
             <div
@@ -162,9 +178,9 @@ export default function AdvisoryPartnerPortalPage() {
                     </strong>
                   </div>
                   <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-800">
-                    <span className="text-slate-500 text-[10px] block">Q2 Cess Due</span>
+                    <span className="text-slate-500 text-[10px] block">Open Cess Due</span>
                     <strong className="text-emerald-400 font-mono">
-                      ₹{(client.cessLiabilityQ2 / 100000).toFixed(2)}L
+                      ₹{(client.openCessLiability / 100000).toFixed(2)}L
                     </strong>
                   </div>
                 </div>
@@ -176,7 +192,7 @@ export default function AdvisoryPartnerPortalPage() {
               </div>
 
               <div className="pt-4 border-t border-slate-800 flex justify-between items-center">
-                <span className="text-[11px] text-slate-500">Next Due: {client.nextFilingDue}</span>
+                <span className="text-[11px] text-slate-500">Next Due: {client.nextFilingDue || "—"}</span>
                 <Link
                   href="/dashboard"
                   className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1 transition"
@@ -187,6 +203,7 @@ export default function AdvisoryPartnerPortalPage() {
             </div>
           ))}
         </div>
+        )}
       </div>
     </div>
   );

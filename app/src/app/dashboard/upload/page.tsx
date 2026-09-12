@@ -7,8 +7,6 @@ import {
   CheckCircle2,
   AlertCircle,
   Download,
-  ShieldAlert,
-  ArrowRight,
   Database,
   RefreshCw,
 } from "lucide-react";
@@ -78,7 +76,8 @@ QM-DEL-9902,Kavita Nair,101994821099,8104,2025-04-01,2025-06-30,72,61000,0`;
         return;
       }
       setResult(json.data);
-    } catch {
+    } catch (err) {
+      console.error("CSV upload failed:", err);
       setErrorMsg("Failed to upload CSV file");
     } finally {
       setUploading(false);

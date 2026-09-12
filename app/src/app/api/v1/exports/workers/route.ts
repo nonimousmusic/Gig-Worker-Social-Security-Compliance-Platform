@@ -1,9 +1,17 @@
 import { NextResponse } from "next/server";
-import { dataStore } from "@/lib/data-store";
+import { requireTenant, getWorkerRecords } from "@/lib/data-access";
 import Papa from "papaparse";
 
 export async function GET() {
-  const workers = dataStore.getWorkers();
+  const tenant = await requireTenant();
+  if (!tenant) {
+    return NextResponse.json(
+      { success: false, error: { code: "UNAUTHORIZED", message: "Not authenticated" } },
+      { status: 401 }
+    );
+  }
+
+  const workers = await getWorkerRecords(tenant);
 
   const exportData = workers.map((w) => ({
     Worker_ID: w.aggregatorWorkerId,

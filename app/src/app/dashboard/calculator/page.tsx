@@ -4,12 +4,8 @@ import { useState } from "react";
 import {
   Calculator,
   Percent,
-  TrendingDown,
   ShieldCheck,
   AlertTriangle,
-  Info,
-  Building,
-  Layers,
 } from "lucide-react";
 import { calculateContribution } from "@/lib/contribution-calc";
 import { calculatePenalty } from "@/lib/penalty-calc";
@@ -35,7 +31,8 @@ export default function Section114SimulatorPage() {
   const stateCessAmount = includeStateCess ? payoutsRupees * 0.01 : 0; // 1% state overlay
   const totalCessPayable = result.finalObligation.amount + stateCessAmount;
 
-  // Fake due date 60 days ago
+  // Hypothetical due date N months ago — the penalty below is illustrative,
+  // not tied to a real filing.
   const dueDate = new Date();
   dueDate.setMonth(dueDate.getMonth() - monthsLate);
   const penalty = calculatePenalty(totalCessPayable, dueDate, new Date());
@@ -238,6 +235,7 @@ export default function Section114SimulatorPage() {
                   Section 133 Late Payment Penalty Estimator
                 </h3>
                 <p className="text-xs text-slate-400">1% Simple Interest per month of delay</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">Illustrative estimate against a hypothetical due date.</p>
               </div>
               <div className="flex items-center gap-2 text-xs">
                 <span className="text-slate-400">Delay:</span>

@@ -4,13 +4,7 @@ import { useState, useEffect } from "react";
 import {
   Clock,
   CheckCircle2,
-  AlertTriangle,
-  Play,
-  RotateCcw,
-  Shield,
-  Layers,
   Info,
-  Calendar,
   Zap,
 } from "lucide-react";
 
@@ -45,14 +39,35 @@ export default function EligibilityEnginePage() {
   // Declaration modal
   const [declaringWorker, setDeclaringWorker] = useState<EligibilityWorker | null>(null);
   const [declarationForm, setDeclarationForm] = useState({
-    otherPlatformName: "Zomato Logistics",
-    declaredDays: "15",
-    periodStart: "2025-04-01",
-    periodEnd: "2025-06-30",
+    otherPlatformName: "",
+    declaredDays: "",
+    periodStart: "",
+    periodEnd: "",
   });
   const [declarationLoading, setDeclarationLoading] = useState(false);
 
-  async function loadEligibilityData() {
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/v1/dashboard/eligibility");
+        const json = await res.json();
+        if (!cancelled && json.success) {
+          setWorkers(json.data.workers);
+          setCounts(json.data.counts);
+        }
+      } catch (err) {
+        console.error("Eligibility load failed:", err);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function reloadEligibilityData() {
     try {
       const res = await fetch("/api/v1/dashboard/eligibility");
       const json = await res.json();
@@ -60,16 +75,10 @@ export default function EligibilityEnginePage() {
         setWorkers(json.data.workers);
         setCounts(json.data.counts);
       }
-    } catch {
-      // Graceful fallback
-    } finally {
-      setLoading(false);
+    } catch (err) {
+      console.error("Eligibility reload failed:", err);
     }
   }
-
-  useEffect(() => {
-    loadEligibilityData();
-  }, []);
 
   async function handleRunCron() {
     setCronRunning(true);
@@ -79,9 +88,10 @@ export default function EligibilityEnginePage() {
       const json = await res.json();
       if (json.success) {
         setCronMessage(`Success: Evaluated ${json.data.evaluatedWorkers} workers. ${json.data.newlyEligibleCount} newly eligible.`);
-        loadEligibilityData();
+        reloadEligibilityData();
       }
-    } catch {
+    } catch (err) {
+      console.error("Threshold evaluation request failed:", err);
       setCronMessage("Cron evaluation failed.");
     } finally {
       setCronRunning(false);
@@ -102,9 +112,10 @@ export default function EligibilityEnginePage() {
       const json = await res.json();
       if (json.success) {
         setDeclaringWorker(null);
-        loadEligibilityData();
+        reloadEligibilityData();
       }
-    } catch {
+    } catch (err) {
+      console.error("Declaration submit failed:", err);
       // Handle error
     } finally {
       setDeclarationLoading(false);
@@ -162,9 +173,9 @@ export default function EligibilityEnginePage() {
             </p>
           </div>
           <div className="bg-slate-900/90 p-3 rounded-lg border border-slate-800">
-            <span className="text-amber-400 font-bold block mb-1">Warning Zone: 80–89 Days</span>
+            <span className="text-amber-400 font-bold block mb-1">Warning Zone: 75–89 Days</span>
             <p className="text-slate-400 text-[11px] leading-relaxed">
-              Automated threshold alerts are dispatched to compliance officers when workers hit 80 days to ensure UAN linkage.
+              Automated threshold alerts are dispatched to compliance officers when workers hit 75 days to ensure UAN linkage.
             </p>
           </div>
         </div>
@@ -178,12 +189,12 @@ export default function EligibilityEnginePage() {
           <span className="text-[10px] text-slate-500">Full cess entitlement</span>
         </div>
         <div className="bg-[#111622] p-4 rounded-xl border border-amber-500/20">
-          <span className="text-xs text-slate-400">Approaching (80-89d)</span>
+          <span className="text-xs text-slate-400">Approaching (75-89d)</span>
           <p className="text-2xl font-bold text-amber-300 mt-1">{counts.approaching}</p>
           <span className="text-[10px] text-slate-500">Action: Verify UAN</span>
         </div>
         <div className="bg-[#111622] p-4 rounded-xl border border-slate-800">
-          <span className="text-xs text-slate-400">Under 80 Days</span>
+          <span className="text-xs text-slate-400">Under 75 Days</span>
           <p className="text-2xl font-bold text-slate-400 mt-1">{counts.inactive}</p>
           <span className="text-[10px] text-slate-500">Not yet covered</span>
         </div>
@@ -213,7 +224,7 @@ export default function EligibilityEnginePage() {
                     <span className="text-[10px] font-mono text-slate-500">({w.aggregatorWorkerId})</span>
                   </div>
                   <div className="text-[11px] text-slate-400 font-mono">
-                    Aadhaar: {w.maskedAadhaar} &bull; UAN: {w.uan}
+                    Aadhaar: {w.maskedAadhaar} &bull; UAN: {w.uan || "Pending linkage"}
                   </div>
                 </div>
 
@@ -230,7 +241,7 @@ export default function EligibilityEnginePage() {
                       <div
                         style={{ width: `${w.progressTo90}%` }}
                         className={`h-full ${
-                          w.daysInLast90 >= 90 ? "bg-emerald-500" : w.daysInLast90 >= 80 ? "bg-amber-500" : "bg-blue-500"
+                          w.daysInLast90 >= 90 ? "bg-emerald-500" : w.daysInLast90 >= 75 ? "bg-amber-500" : "bg-blue-500"
                         }`}
                       />
                     </div>
@@ -346,7 +357,7 @@ export default function EligibilityEnginePage() {
               </div>
 
               <div className="p-2.5 bg-slate-900 border border-slate-800 rounded-lg text-[11px] text-slate-400 leading-relaxed">
-                By submitting this declaration, the days reported are aggregate-linked with the worker's UIDAI/UAN profile under Central Rule 28 for Section 114 social security welfare.
+                By submitting this declaration, the days reported are aggregate-linked with the worker&apos;s UIDAI/UAN profile under Central Rule 28 for Section 114 social security welfare.
               </div>
 
               <div className="pt-3 flex justify-end gap-2 border-t border-slate-800">

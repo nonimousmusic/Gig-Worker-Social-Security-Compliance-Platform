@@ -1,8 +1,10 @@
 # Environment Setup & Developer Guide
 ## Gig Worker Social Security Compliance Platform
 
-**Version:** 1.0  
+**Version:** 2.0
 **Date:** 12 September 2026
+
+> Stack: Next.js 16 + React 19 + Supabase (Postgres + Auth + RLS). No Prisma, no local Postgres, no Puppeteer, no email service. You need a Supabase project before the app can run.
 
 ---
 
@@ -23,22 +25,23 @@
 
 ## 1. Prerequisites
 
-| Requirement | Minimum Version | Recommended | Purpose |
-|---|---|---|---|
-| **Node.js** | 18.x LTS | 20.x LTS | Runtime for Next.js and build tools |
-| **npm** | 9.x | 10.x | Package management |
-| **PostgreSQL** | 15.x | 16.x | Primary database |
-| **Git** | 2.40+ | Latest | Version control |
-| **Chromium / Chrome** | Latest stable | Latest stable | Puppeteer PDF generation (auto-downloaded) |
+| Requirement | Version | Purpose |
+|---|---|---|
+| **Node.js** | 20.x LTS or 22.x | Runtime for Next.js and build tools |
+| **npm** | 10.x+ | Package management |
+| **Git** | 2.40+ | Version control |
+| **Supabase project** | Any (Postgres 15+) | Hosted database + Auth (provides URL + anon/service-role keys) |
+| **Supabase CLI** (optional) | Latest | `supabase db push`, local inspect |
 
 **Optional but recommended:**
 
 | Tool | Purpose |
 |---|---|
-| **Prisma Studio** | Visual database browser (included with Prisma) |
 | **Postman / Insomnia** | API testing and exploration |
-| **pgAdmin / DBeaver** | PostgreSQL GUI management |
-| **VS Code** | IDE with Prisma, ESLint, and Tailwind CSS IntelliSense extensions |
+| **Supabase Dashboard** | Visual database browser (Table Editor replaces Prisma Studio) |
+| **VS Code** | IDE with ESLint + Tailwind CSS IntelliSense |
+
+No local PostgreSQL, Chromium, Redis, or mail server is required.
 
 ---
 
@@ -48,115 +51,84 @@
 freelance-wali-platform/
 │
 ├── docs/                           # Project documentation (this folder)
-│   ├── api_specification.md        # REST API specification
-│   ├── user_flows.md               # User journey maps & flow diagrams
-│   ├── regulatory_reference.md     # Legal/regulatory compliance mapping
+│   ├── ai_slop_review.md           # Code-quality review + remediation log
+│   ├── api_specification.md        # REST API specification (19 routes, as-built)
+│   ├── api_testing_guide.md        # curl/PowerShell commands per endpoint
+│   ├── compliance_officer_guide.md # Step-by-step user manual
 │   ├── environment_setup.md        # This file
-│   ├── security_policy.md          # Security & DPDP compliance policy
 │   ├── glossary.md                 # Domain terminology reference
-│   └── csv_templates/              # Sample CSV upload templates
+│   ├── operations_runbook.md       # Operations, migrations & maintenance
+│   ├── prd.md                      # Product Requirements Document
+│   ├── regulatory_reference.md     # Legal mapping to Code on Social Security 2020
+│   ├── security_policy.md          # Auth, RLS, DPDP posture (as-built)
+│   ├── system_architecture.md      # Architecture & implementation reference
+│   ├── tech_spec_and_db_schema.md  # Engines, privacy, SQL schema
+│   ├── user_flows.md               # User journey maps for every persona
+│   └── csv_templates/              # Canonical CSV upload templates
 │       ├── daily_ledger_template.csv
 │       └── summary_backfill_template.csv
 │
-├── prd.md                          # Product Requirements Document
-├── tech_spec_and_db_schema.md      # Technical architecture & Prisma schema
+├── prd.md                          # (Mirror of docs/prd.md)
+├── tech_spec_and_db_schema.md      # (Mirror of docs/tech_spec_and_db_schema.md)
 │
-├── src/                            # Application source code (Next.js)
-│   ├── app/                        # Next.js App Router pages & layouts
-│   │   ├── (auth)/                 # Auth route group
-│   │   │   ├── login/
-│   │   │   ├── register/
-│   │   │   ├── verify-email/
-│   │   │   └── forgot-password/
-│   │   ├── (dashboard)/            # Authenticated dashboard route group
-│   │   │   ├── layout.tsx          # Dashboard shell with sidebar
-│   │   │   ├── page.tsx            # Dashboard home / compliance overview
-│   │   │   ├── workers/            # Worker management pages
-│   │   │   ├── filings/            # Filing wizard & calendar
-│   │   │   ├── calculator/         # Contribution calculator
-│   │   │   ├── reports/            # Export & audit reports
-│   │   │   ├── notifications/      # Alert center
-│   │   │   └── settings/           # Org settings, team, partner access
-│   │   ├── (partner)/              # Partner/advisor portal route group
-│   │   │   ├── layout.tsx
-│   │   │   └── clients/
-│   │   ├── free-audit/             # Public lead-gen funnel
-│   │   └── api/                    # API route handlers
-│   │       └── v1/
-│   │           ├── auth/
-│   │           ├── workers/
-│   │           ├── filings/
-│   │           ├── contributions/
-│   │           ├── notifications/
-│   │           ├── exports/
-│   │           ├── ingestion/
-│   │           ├── partner/
-│   │           ├── free-audit/
-│   │           └── internal/
-│   │               └── cron/
-│   │
-│   ├── components/                 # Reusable UI components
-│   │   ├── ui/                     # Base UI primitives (Radix UI wrappers)
-│   │   ├── dashboard/              # Dashboard-specific components
-│   │   ├── forms/                  # Form components (filing wizard, upload)
-│   │   ├── charts/                 # Data visualization components
-│   │   └── layout/                 # Navigation, sidebar, header
-│   │
-│   ├── lib/                        # Shared utilities and business logic
-│   │   ├── db.ts                   # Prisma client singleton
-│   │   ├── auth.ts                 # JWT & session utilities
-│   │   ├── encryption.ts           # AES-256-GCM encryption helpers
-│   │   ├── aadhaar-masking.ts      # Aadhaar sanitization pipeline
-│   │   ├── eligibility-engine.ts   # Day-count calculation logic
-│   │   ├── contribution-calc.ts    # Contribution & ceiling calculator
-│   │   ├── penalty-calc.ts         # Interest penalty computation
-│   │   ├── csv-parser.ts           # CSV/XLSX ingestion & validation
-│   │   ├── pdf-generator.ts        # Puppeteer PDF rendering
-│   │   ├── email.ts                # Transactional email (Resend/SES)
-│   │   ├── audit-logger.ts         # Audit log helper
-│   │   ├── financial-year.ts       # FY calculation utilities
-│   │   └── validators.ts           # Zod schemas for request validation
-│   │
-│   ├── types/                      # TypeScript type definitions
-│   │   ├── api.ts                  # API request/response types
-│   │   ├── domain.ts               # Domain model types
-│   │   └── enums.ts                # Shared enum definitions
-│   │
-│   └── styles/                     # Global styles
-│       └── globals.css             # TailwindCSS imports & custom styles
-│
-├── prisma/
-│   ├── schema.prisma               # Database schema definition
-│   ├── migrations/                 # Database migration history
-│   └── seed.ts                     # Seed script for development data
-│
-├── public/                         # Static assets
-│   ├── templates/                  # PDF form templates (Form-XX, Form-XXI)
-│   └── images/
-│
-├── tests/                          # Test suites
-│   ├── unit/                       # Unit tests
-│   │   ├── eligibility-engine.test.ts
-│   │   ├── contribution-calc.test.ts
-│   │   ├── penalty-calc.test.ts
-│   │   ├── aadhaar-masking.test.ts
-│   │   └── csv-parser.test.ts
-│   ├── integration/                # Integration tests
-│   │   ├── api/                    # API endpoint tests
-│   │   └── db/                     # Database operation tests
-│   └── e2e/                        # End-to-end tests
-│       ├── onboarding.spec.ts
-│       ├── filing-wizard.spec.ts
-│       └── free-audit.spec.ts
-│
-├── .env.example                    # Environment variable template
-├── .env.local                      # Local environment variables (gitignored)
-├── .gitignore
-├── next.config.ts                  # Next.js configuration
-├── tailwind.config.ts              # TailwindCSS configuration
-├── tsconfig.json                   # TypeScript configuration
-├── package.json
-└── README.md
+└── app/                            # Production Next.js application
+    ├── package.json                # Deps & scripts (dev/build/start/lint/supabase:seed)
+    ├── next.config.ts              # Next.js configuration
+    ├── tsconfig.json               # Strict TypeScript configuration
+    ├── postcss.config.mjs          # PostCSS / TailwindCSS v4 plugin
+    ├── .env.example                # Env template (Supabase keys + CRON_SECRET)
+    ├── supabase/
+    │   ├── migrations/             # SQL migrations (0001_init, 0002_address, 0003_leads)
+    │   └── seed.sql                # Idempotent demo data (fixed UUIDs)
+    ├── scripts/
+    │   └── seed-demo-user.mjs      # Creates demo login user (service role)
+    └── src/
+        ├── proxy.ts                # Session refresh + page guards (Next 16 proxy())
+        ├── lib/
+        │   ├── supabase/           # client (browser), server (cookies), service (admin), middleware helper
+        │   ├── session.ts          # getSessionData(): auth.users → profiles → organizations
+        │   ├── data-access.ts      # requireTenant() + RLS-backed mappers
+        │   ├── auth.ts             # Registration validators only (work email, password)
+        │   ├── eligibility-engine.ts # Single 90/120/75 engine + rank helpers
+        │   ├── contribution-calc.ts  # Section 114 min(turnover×rate, payouts×5%)
+        │   ├── penalty-calc.ts       # 1%/mo simple interest
+        │   ├── csv-parser.ts         # PapaParse validators (daily + backfill)
+        │   ├── aadhaar-masking.ts    # Last-4 masking pipeline
+        │   ├── audit-logger.ts       # Append-only audit_logs writer/reader
+        │   ├── financial-year.ts     # Indian FY helpers
+        │   └── types.ts              # Shared UI/API types (WorkerRecord, FilingItem, …)
+        └── app/                    # Next.js 16 App Router pages & APIs
+            ├── page.tsx            # Landing page
+            ├── login/page.tsx      # Supabase browser-client sign-in
+            ├── register/page.tsx   # → POST /api/v1/auth/register
+            ├── partner/page.tsx    # Advisory multi-client console
+            ├── free-audit/page.tsx # Public estimator funnel
+            ├── dashboard/
+            │   ├── layout.tsx      # Live org/user/deadline shell
+            │   ├── page.tsx        # Overview (stats, deadline, recent filings)
+            │   ├── workers/        # Directory + add + profile modal w/ activity strip
+            │   ├── upload/         # CSV Ingestion Studio (2 formats + templates)
+            │   ├── eligibility/    # Meters, cron trigger, declaration modal
+            │   ├── filings/        # 4-step Form-XX wizard + filings table
+            │   ├── calculator/     # Section 114 simulator + illustrative penalties
+            │   ├── challans/       # Deposit form (open filings) + locked vault
+            │   ├── alerts/         # Notifications + mark-all-read
+            │   ├── reports/        # Live audit dossier + CSV + print
+            │   └── settings/       # Org profile save + real team list
+            └── api/v1/             # 19 route files (see api_specification.md)
+                ├── auth/{register,me}/route.ts
+                ├── organizations/route.ts
+                ├── team/route.ts
+                ├── dashboard/{overview,eligibility}/route.ts
+                ├── workers/route.ts
+                ├── workers/[id]/{route.ts,declarations/route.ts}
+                ├── ledger/upload/route.ts
+                ├── filings/{route.ts,[id]/route.ts,[id]/challan/route.ts}
+                ├── exports/{workers,audit-report}/route.ts
+                ├── notifications/route.ts
+                ├── partner/clients/route.ts
+                ├── free-audit/route.ts
+                └── cron/evaluate-eligibility/route.ts
 ```
 
 ---
@@ -167,8 +139,10 @@ freelance-wali-platform/
 
 ```bash
 git clone https://github.com/your-org/gig-cess-platform.git
-cd gig-cess-platform
+cd gig-cess-platform/app
 ```
+
+> All app commands run from `app/`.
 
 ### Step 2: Install Dependencies
 
@@ -182,31 +156,28 @@ npm install
 cp .env.example .env.local
 ```
 
-Edit `.env.local` with your local configuration (see [Section 4](#4-environment-variables)).
+Fill in your Supabase project URL + anon key + service-role key (see [Section 4](#4-environment-variables)).
 
-### Step 4: Set Up PostgreSQL Database
-
-```bash
-# Create the database
-createdb gigcess_dev
-
-# Or via psql:
-psql -U postgres -c "CREATE DATABASE gigcess_dev;"
-```
-
-### Step 5: Run Prisma Migrations
+### Step 4: Apply Database Migrations
 
 ```bash
-npx prisma migrate dev --name init
+supabase db push
 ```
 
-### Step 6: Seed Development Data (Optional)
+This applies `supabase/migrations/0001_init.sql` (tables, enums, RLS), `0002_org_registered_address.sql`, and `0003_audit_leads.sql`.
+
+### Step 5: Load Demo Data (Optional)
 
 ```bash
-npx prisma db seed
+# SQL seed: demo org (fixed UUID), workers, aggregates, ledger, filings, challans
+supabase db seed
+# or: psql "$SUPABASE_DB_URL" -f supabase/seed.sql
+
+# Demo login user (compliance@quickmove.in / Compliance@2025 by default)
+npm run supabase:seed
 ```
 
-### Step 7: Start Development Server
+### Step 6: Start Development Server
 
 ```bash
 npm run dev
@@ -218,129 +189,59 @@ The application will be available at `http://localhost:3000`.
 
 ## 4. Environment Variables
 
-### `.env.example`
+### `.env.example` (complete — this is the entire list)
 
 ```env
-# ──────────────────────────────────────────
-# DATABASE
-# ──────────────────────────────────────────
-DATABASE_URL="postgresql://postgres:password@localhost:5432/gigcess_dev?schema=public"
+# SUPABASE (Authentication + PostgreSQL + RLS)
+NEXT_PUBLIC_SUPABASE_URL="https://your-project-ref.supabase.co"
+NEXT_PUBLIC_SUPABASE_ANON_KEY="your-anon-key"
 
-# ──────────────────────────────────────────
-# AUTHENTICATION
-# ──────────────────────────────────────────
-JWT_SECRET="your-256-bit-secret-key-here"
-JWT_ACCESS_EXPIRY="1h"
-JWT_REFRESH_EXPIRY="7d"
+# Server-only service role key (NEVER expose to the browser).
+SUPABASE_SERVICE_ROLE_KEY="your-service-role-key"
 
-# ──────────────────────────────────────────
-# ENCRYPTION (DPDP Act PII Protection)
-# ──────────────────────────────────────────
-# Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-ENCRYPTION_KEY="64-character-hex-string-for-aes-256-gcm"
-
-# ──────────────────────────────────────────
-# EMAIL (Transactional Alerts)
-# ──────────────────────────────────────────
-# Option A: Resend
-RESEND_API_KEY="re_xxxxxxxxxxxx"
-EMAIL_FROM="alerts@gigcesshq.in"
-
-# Option B: AWS SES
-# AWS_SES_REGION="ap-south-1"
-# AWS_SES_ACCESS_KEY_ID=""
-# AWS_SES_SECRET_ACCESS_KEY=""
-
-# ──────────────────────────────────────────
 # CRON SECURITY
-# ──────────────────────────────────────────
-CRON_SECRET="random-secret-for-cron-endpoint-auth"
+CRON_SECRET="change-this-cron-secret"
 
-# ──────────────────────────────────────────
 # APPLICATION
-# ──────────────────────────────────────────
 NEXT_PUBLIC_APP_URL="http://localhost:3000"
 NEXT_PUBLIC_APP_NAME="GigCessHQ"
-NODE_ENV="development"
-
-# ──────────────────────────────────────────
-# FILE UPLOADS
-# ──────────────────────────────────────────
-UPLOAD_DIR="./uploads"
-MAX_FILE_SIZE_MB="10"
-MAX_FREE_AUDIT_ROWS="500"
-
-# ──────────────────────────────────────────
-# PDF GENERATION (Puppeteer)
-# ──────────────────────────────────────────
-# Leave blank to use bundled Chromium
-PUPPETEER_EXECUTABLE_PATH=""
 ```
 
 ### Variable Reference
 
-| Variable | Required | Description | Example |
-|---|---|---|---|
-| `DATABASE_URL` | ✅ | PostgreSQL connection string | `postgresql://user:pass@host:5432/db` |
-| `JWT_SECRET` | ✅ | Secret for signing JWT tokens (min 32 chars) | Random hex string |
-| `ENCRYPTION_KEY` | ✅ | AES-256 key for PII encryption (64 hex chars) | `node -e "..."` output |
-| `RESEND_API_KEY` | ✅ (prod) | Resend API key for transactional emails | `re_xxxxxxxxxxxx` |
-| `EMAIL_FROM` | ✅ (prod) | Sender email address for alerts | `alerts@gigcesshq.in` |
-| `CRON_SECRET` | ✅ | Secret header value for cron endpoint auth | Random string |
-| `NEXT_PUBLIC_APP_URL` | ✅ | Base URL of the application | `http://localhost:3000` |
-| `UPLOAD_DIR` | ❌ | Directory for uploaded files | `./uploads` |
-| `MAX_FILE_SIZE_MB` | ❌ | Maximum upload file size | `10` |
-| `MAX_FREE_AUDIT_ROWS` | ❌ | Max CSV rows for free audit | `500` |
+| Variable | Required | Description |
+|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | ✅ | Supabase project URL (Dashboard → Settings → API) |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ | Public anon key (RLS-bound, safe for browser) |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | Bypasses RLS — server-only (register, cron, seed script) |
+| `CRON_SECRET` | ✅ (prod) | `Authorization: Bearer` value for scheduler → cron route |
+| `NEXT_PUBLIC_APP_URL` | ✅ | Base URL of the application |
+| `NEXT_PUBLIC_APP_NAME` | ❌ | Display name (`GigCessHQ`) |
+
+There is no `DATABASE_URL`, `JWT_SECRET`, `ENCRYPTION_KEY`, email, upload-dir, or Puppeteer configuration — none of those subsystems exist.
 
 ---
 
 ## 5. Database Setup
 
-### Local Development
+Everything is plain SQL + RLS; there is no ORM client to generate.
 
 ```bash
-# Create database
-createdb gigcess_dev
+# Apply pending migrations to the linked project
+supabase db push
 
-# Run migrations
-npx prisma migrate dev
-
-# Open Prisma Studio (visual database browser)
-npx prisma studio
-```
-
-### Reset Database
-
-```bash
-# Drop all data and re-run all migrations
-npx prisma migrate reset
-```
-
-### Generate Prisma Client (after schema changes)
-
-```bash
-npx prisma generate
-```
-
-### Create a New Migration
-
-```bash
-npx prisma migrate dev --name descriptive_migration_name
+# New migration (numbered, idempotent DDL preferred)
+supabase migration new <descriptive_name>
+# ... then review the SQL file before pushing
 ```
 
 ### Seed Data
 
-The seed script creates:
-- 1 sample aggregator organization
-- 1 sample advisory partner organization
-- Admin users for each
-- 50 sample workers with engagement data
-- Sample filing records
-- Sample contribution rate configurations
+`supabase/seed.sql` is idempotent (fixed UUIDs + `ON CONFLICT DO NOTHING` + a `NOT EXISTS` guard on the generated ledger) and creates:
+- Demo org `00000000-0000-0000-0000-000000000001` (QuickMove) with registered address
+- 8 workers, FY aggregates, rolling-window ledger rows, 3 filings (1 open DRAFT), 1 challan, 4 notifications, 3 audit rows
 
-```bash
-npx prisma db seed
-```
+`npm run supabase:seed` then creates the demo login user and attaches its profile to the demo org (`DEMO_EMAIL` / `DEMO_PASSWORD` env overrides supported).
 
 ---
 
@@ -365,17 +266,12 @@ npm start
 | Command | Description |
 |---|---|
 | `npm run dev` | Start development server with hot reload |
-| `npm run build` | Create production build |
+| `npm run build` | Type-check + production build (must stay green) |
 | `npm start` | Start production server |
-| `npm run lint` | Run ESLint |
-| `npm run type-check` | Run TypeScript type checking |
-| `npm test` | Run test suite |
-| `npm run test:unit` | Run unit tests only |
-| `npm run test:integration` | Run integration tests only |
-| `npm run test:e2e` | Run end-to-end tests |
-| `npx prisma studio` | Open Prisma database GUI |
-| `npx prisma migrate dev` | Run pending migrations |
-| `npx prisma db seed` | Seed development data |
+| `npm run lint` | Run ESLint (repo standard: **zero** errors, **zero** warnings) |
+| `npm test` | Run unit tests once (`vitest run`) |
+| `npm run test:watch` | Re-run unit tests on file changes |
+| `npm run supabase:seed` | Create demo login user via service role |
 
 ---
 
@@ -387,7 +283,7 @@ npm start
 feature/   → New features           (feature/worker-bulk-upload)
 fix/       → Bug fixes              (fix/eligibility-calc-off-by-one)
 docs/      → Documentation changes  (docs/api-spec-update)
-chore/     → Maintenance tasks      (chore/upgrade-prisma)
+chore/     → Maintenance tasks      (chore/upgrade-next)
 refactor/  → Code restructuring     (refactor/eligibility-engine)
 ```
 
@@ -398,64 +294,41 @@ Follow [Conventional Commits](https://www.conventionalcommits.org/):
 ```
 feat(workers): add bulk CSV upload with validation
 fix(eligibility): correct 90-day threshold boundary condition
-docs(api): add contribution calculator endpoint spec
-chore(deps): upgrade prisma to 5.x
-refactor(auth): extract JWT verification middleware
-test(engine): add edge cases for multi-aggregator day count
+docs(api): document organizations PATCH endpoint
+chore(deps): upgrade next to 16.x
+refactor(auth): move session resolution to getSessionData
 ```
 
 ### Pull Request Checklist
 
-- [ ] All tests pass (`npm test`)
-- [ ] No TypeScript errors (`npm run type-check`)
-- [ ] No lint warnings (`npm run lint`)
-- [ ] Database migrations included if schema changed
+- [ ] `npm run build` passes (includes type-check)
+- [ ] `npm run lint` is clean (zero warnings)
+- [ ] SQL migration included if schema changed (numbered, idempotent)
 - [ ] API documentation updated if endpoints changed
 - [ ] Audit log events added for new state-changing operations
 - [ ] Aadhaar masking verified if handling new PII fields
-- [ ] RBAC permissions checked for new endpoints
+- [ ] RLS policies cover new tables (deny-by-default; service role only where justified)
 
 ---
 
 ## 8. Testing
 
-### Unit Tests
-
-Located in `tests/unit/`. Focus on business logic:
+Unit tests live next to the modules they cover (`src/lib/*.test.ts`, run with Vitest):
 
 ```bash
-# Run all unit tests
-npm run test:unit
-
-# Run specific test file
-npx vitest run tests/unit/eligibility-engine.test.ts
-
-# Watch mode
-npx vitest watch tests/unit/
+npm test          # single run (37 tests)
+npm run test:watch # watch mode
 ```
 
-**Critical unit test areas:**
-- Eligibility engine: 90-day, 120-day boundary conditions, edge cases.
-- Contribution calculator: Turnover vs. ceiling, rounding, zero-value handling.
-- Penalty calculator: Month fractions, exact boundary dates.
-- Aadhaar masking: All formats, malformed inputs, injection attempts.
-- CSV parser: Valid/invalid rows, date formats, encoding issues.
+**Covered (all pure functions):**
+- Eligibility engine: 75/90/120 boundaries, multi-aggregator gate, labels/colors, rank helpers.
+- Contribution calculator: turnover vs. ceiling branches, custom ceiling rate, rounding, zeros.
+- Penalty calculator: non-overdue zeros, month-rounding-up, statutory metadata.
+- Aadhaar masking: valid/invalid ranges, masked passthrough, log sanitization, UAN validate/format.
+- CSV parser: valid rows, per-field failures, header aliases, backfill bounds.
+- Financial year: 1-April boundary, calendar-day diffs.
 
-### Integration Tests
-
-Located in `tests/integration/`. Test API endpoints with database:
-
-```bash
-npm run test:integration
-```
-
-### E2E Tests
-
-Located in `tests/e2e/`. Full browser-based tests:
-
-```bash
-npm run test:e2e
-```
+**Not covered:** API routes (need a live Supabase project + session cookies), React pages, RLS policies. The highest-value next addition is route-level tests against a preview-branch database.
 
 ---
 
@@ -465,44 +338,41 @@ npm run test:e2e
 
 | Component | Service | Rationale |
 |---|---|---|
-| **Application** | Vercel (Pro plan) | Native Next.js hosting, edge functions, cron jobs |
-| **Database** | Supabase or Neon PostgreSQL | Managed PostgreSQL with backups |
-| **File Storage** | AWS S3 / Cloudflare R2 | CSV uploads, challan receipts, generated PDFs |
-| **Email** | Resend or AWS SES | Transactional email delivery |
-| **Monitoring** | Sentry | Error tracking and performance monitoring |
-| **DNS & CDN** | Cloudflare | DDoS protection, SSL, caching |
+| **Application** | Vercel | Native Next.js hosting |
+| **Database + Auth** | Supabase (the same project from §4) | Managed Postgres, Auth, backups |
+| **Monitoring** | Sentry (future) | Error tracking — not yet wired |
+
+No file storage, email provider, or PDF service is used — there is nothing to provision for them.
 
 ### Vercel Deployment
 
 ```bash
-# Install Vercel CLI
 npm i -g vercel
-
-# Deploy
 vercel
-
-# Set environment variables
-vercel env add DATABASE_URL
-vercel env add JWT_SECRET
-# ... etc
+vercel env add NEXT_PUBLIC_SUPABASE_URL
+vercel env add NEXT_PUBLIC_SUPABASE_ANON_KEY
+vercel env add SUPABASE_SERVICE_ROLE_KEY
+vercel env add CRON_SECRET
 ```
 
-### Cron Job Setup (Vercel)
+### Cron Job Setup
 
-Add to `vercel.json`:
+No schedule is committed in-repo (there is no `vercel.json`). Point any scheduler at the eligibility sync:
+
+```bash
+curl -X POST https://app.gigcesshq.in/api/v1/cron/evaluate-eligibility \
+  -H "Authorization: Bearer $CRON_SECRET"
+```
+
+Vercel Cron example (`vercel.json`):
 
 ```json
 {
-  "crons": [
-    {
-      "path": "/api/v1/internal/cron/daily-compliance-sweep",
-      "schedule": "30 19 * * *"
-    }
-  ]
+  "crons": [{ "path": "/api/v1/cron/evaluate-eligibility", "schedule": "30 0 * * *" }]
 }
 ```
 
-> **Note:** The cron schedule `30 19 * * *` is 19:30 UTC = 00:30 IST (India Standard Time = UTC+5:30).
+(The dashboard also exposes a session-authenticated "Trigger Nightly Audit Job" button that runs the same job org-scoped.)
 
 ---
 
@@ -510,35 +380,32 @@ Add to `vercel.json`:
 
 ### TypeScript
 
-- Strict mode enabled (`"strict": true` in tsconfig).
-- No `any` types — use proper generics or `unknown` with type guards.
-- All API responses typed with Zod schemas for runtime validation.
-- Use `const` assertions where applicable.
+- Strict mode enabled (`"strict": true` in tsconfig); `npm run build` must pass.
+- Untyped Supabase rows use the shared `AnyRow` alias (`src/lib/types.ts`) — do not sprinkle bare `any`.
+- Single eligibility source: `src/lib/eligibility-engine.ts` — never reimplement thresholds inline.
+- Ingestion/declaration paths are **promote-only**; only the cron syncs both ways.
 
 ### File Naming
 
 | Type | Convention | Example |
 |---|---|---|
-| Components | PascalCase | `WorkerTable.tsx`, `FilingWizard.tsx` |
+| Pages/layouts | Next.js convention | `page.tsx`, `layout.tsx`, `route.ts` |
 | Utilities | kebab-case | `eligibility-engine.ts`, `csv-parser.ts` |
-| API routes | kebab-case | `route.ts` (Next.js convention) |
-| Types | PascalCase | `api.ts`, `domain.ts` |
-| Tests | Same as source + `.test.ts` | `eligibility-engine.test.ts` |
+| Supabase migrations | Numbered SQL | `0003_audit_leads.sql` |
 
 ### API Route Conventions
 
-- All routes under `/api/v1/` for versioning.
-- Use Next.js App Router route handlers (`route.ts`).
-- Always validate request body with Zod schemas.
-- Always check RBAC permissions before processing.
-- Always log to `AuditLog` for state-changing operations.
-- Always return consistent JSON response format.
+- All routes under `/api/v1/` for versioning; Next.js App Router handlers (`route.ts`).
+- Authenticate via `requireTenant()` (`src/lib/data-access.ts`) — every data route, no exceptions.
+- Tenant-scope every query (`organization_id`); rely on RLS as the backstop, never as the only check.
+- Log to `audit_logs` for state-changing operations (best-effort; failures must not break the request).
+- Return the standard envelope: `{ success: true, data }` / `{ success: false, error: { code, message } }`.
+- Never invent data: return empty arrays/nulls when there is nothing to show.
 
 ### Database Conventions
 
-- All tables use UUID primary keys (`@id @default(uuid())`).
-- All tables have `createdAt` and `updatedAt` timestamps.
-- Use `@@index` for frequently queried fields.
-- Use `@@unique` for natural keys.
-- Soft-delete via `isActive` flag rather than `DELETE` operations on Workers.
-- Financial values use `Decimal` type with explicit precision.
+- All tables use UUID primary keys (`uuid PRIMARY KEY DEFAULT gen_random_uuid()`).
+- All tables have `created_at` / `updated_at` (with `touch_updated_at` trigger where updated).
+- Every table has RLS enabled with tenant `USING`/`WITH CHECK` policies; audit tables are append-only (no UPDATE/DELETE policies).
+- Financial values use `numeric(14, 2)`; day counts are integers.
+- Soft-deactivate workers via `is_active`, never `DELETE` business rows.

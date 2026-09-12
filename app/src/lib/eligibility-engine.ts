@@ -7,7 +7,26 @@
  * Multi-aggregator threshold: 120 days (internal + self-reported) → ELIGIBLE_MULTI_AGGREGATOR
  */
 
-import type { EligibilityStatus } from "@prisma/client";
+export type EligibilityStatus = "ELIGIBLE" | "APPROACHING" | "INACTIVE" | "ELIGIBLE_MULTI_AGGREGATOR";
+
+/** Severity rank used for promote-only updates (ingestion paths never demote). */
+export const ELIGIBILITY_RANK: Record<EligibilityStatus, number> = {
+  INACTIVE: 0,
+  APPROACHING: 1,
+  ELIGIBLE: 2,
+  ELIGIBLE_MULTI_AGGREGATOR: 3,
+};
+
+export function isEligibleStatus(status: EligibilityStatus): boolean {
+  return status === "ELIGIBLE" || status === "ELIGIBLE_MULTI_AGGREGATOR";
+}
+
+/** Null-safe rank lookup for untyped DB values. */
+export function rankEligibility(status: string): number {
+  return ELIGIBILITY_RANK[status as EligibilityStatus] ?? 0;
+}
+
+/** Single source of truth for day-count eligibility. Used by the cron job, CSV ingestion, and declarations. */
 
 export interface EligibilityResult {
   internalDaysWorked: number;
@@ -22,7 +41,6 @@ export interface EligibilityResult {
 const SINGLE_AGGREGATOR_THRESHOLD = 90;
 const MULTI_AGGREGATOR_THRESHOLD = 120;
 const APPROACHING_START = 75;
-const AT_RISK_START = 85;
 
 export function calculateEligibility(
   internalDays: number,
@@ -36,17 +54,13 @@ export function calculateEligibility(
     eligibilityStatus = "ELIGIBLE_MULTI_AGGREGATOR";
   } else if (internalDays >= SINGLE_AGGREGATOR_THRESHOLD) {
     eligibilityStatus = "ELIGIBLE";
-  } else if (internalDays >= AT_RISK_START) {
-    eligibilityStatus = "AT_RISK_CRITICAL";
   } else if (internalDays >= APPROACHING_START) {
-    eligibilityStatus = "APPROACHING_THRESHOLD";
+    eligibilityStatus = "APPROACHING";
   } else {
-    eligibilityStatus = "NOT_YET_ELIGIBLE";
+    eligibilityStatus = "INACTIVE";
   }
 
-  const isEligible =
-    eligibilityStatus === "ELIGIBLE" ||
-    eligibilityStatus === "ELIGIBLE_MULTI_AGGREGATOR";
+  const isEligible = isEligibleStatus(eligibilityStatus);
 
   return {
     internalDaysWorked: internalDays,
@@ -61,9 +75,8 @@ export function calculateEligibility(
 
 export function getStatusLabel(status: EligibilityStatus): string {
   const labels: Record<EligibilityStatus, string> = {
-    NOT_YET_ELIGIBLE: "Not Yet Eligible",
-    APPROACHING_THRESHOLD: "Approaching (75-84 days)",
-    AT_RISK_CRITICAL: "At Risk (85-89 days)",
+    INACTIVE: "Not Yet Eligible",
+    APPROACHING: "Approaching (75-89 days)",
     ELIGIBLE: "Eligible (90+ days)",
     ELIGIBLE_MULTI_AGGREGATOR: "Eligible — Multi-Aggregator (120+ days)",
   };
@@ -72,13 +85,12 @@ export function getStatusLabel(status: EligibilityStatus): string {
 
 export function getStatusColor(status: EligibilityStatus): string {
   const colors: Record<EligibilityStatus, string> = {
-    NOT_YET_ELIGIBLE: "slate",
-    APPROACHING_THRESHOLD: "amber",
-    AT_RISK_CRITICAL: "orange",
+    INACTIVE: "slate",
+    APPROACHING: "amber",
     ELIGIBLE: "emerald",
     ELIGIBLE_MULTI_AGGREGATOR: "blue",
   };
   return colors[status];
 }
 
-export { SINGLE_AGGREGATOR_THRESHOLD, MULTI_AGGREGATOR_THRESHOLD, APPROACHING_START, AT_RISK_START };
+export { SINGLE_AGGREGATOR_THRESHOLD, MULTI_AGGREGATOR_THRESHOLD, APPROACHING_START };

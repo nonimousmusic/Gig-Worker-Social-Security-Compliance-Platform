@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { dataStore, ChallanItem } from "@/lib/data-store";
+import { requireTenant, mapChallan } from "@/lib/data-access";
+import { createClient } from "@/lib/supabase/server";
 import { logAuditEvent } from "@/lib/audit-logger";
 import crypto from "crypto";
 
@@ -8,8 +9,23 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const tenant = await requireTenant();
+    if (!tenant) {
+      return NextResponse.json(
+        { success: false, error: { code: "UNAUTHORIZED", message: "Not authenticated" } },
+        { status: 401 }
+      );
+    }
+
     const { id } = await params;
-    const filing = dataStore.getFilingById(id);
+    const supabase = await createClient();
+
+    const { data: filing } = await supabase
+      .from("filing_records")
+      .select("*")
+      .eq("id", id)
+      .eq("organization_id", tenant.organizationId)
+      .single();
 
     if (!filing) {
       return NextResponse.json(
@@ -32,29 +48,40 @@ export async function POST(
     const payloadToHash = `${challanNumber}:${utrNumber}:${amount}:${paymentDate}:${nowIso}`;
     const sha256Hash = crypto.createHash("sha256").update(payloadToHash).digest("hex");
 
-    const newChallan: Omit<ChallanItem, "id"> = {
-      filingId: id,
-      challanNumber,
-      bankName: bankName || "State Bank of India — Treasury Branch",
-      utrNumber,
-      amount: amount || filing.finalCessPayable,
-      paymentDate: paymentDate || new Date().toISOString().split("T")[0],
-      verified: true,
-      lockedAt: nowIso,
-      sha256Hash,
-      documentUrl: `/uploads/challans/${challanNumber}.pdf`,
-    };
+    const { data: savedChallan, error: insertError } = await supabase
+      .from("filing_challans")
+      .insert({
+        filing_record_id: id,
+        challan_number: challanNumber,
+        bank_name: bankName || "State Bank of India — Treasury Branch",
+        utr_number: utrNumber,
+        amount_deposited: amount || filing.final_liability_amount,
+        payment_date: paymentDate || nowIso.slice(0, 10),
+        verified: true,
+        locked_at: nowIso,
+        sha256_hash: sha256Hash,
+        // No file store is wired up; the reference number is the record.
+        document_url: null,
+      })
+      .select()
+      .single();
 
-    const savedChallan = dataStore.addChallan(newChallan);
+    if (insertError || !savedChallan) {
+      return NextResponse.json(
+        { success: false, error: { code: "INTERNAL_ERROR", message: insertError?.message || "Challan upload failed" } },
+        { status: 500 }
+      );
+    }
 
-    // Lock filing to PAID
-    dataStore.updateFiling(id, {
-      status: "PAID",
-      challanId: savedChallan.id,
-      challanNumber: savedChallan.challanNumber,
-      challanUrl: savedChallan.documentUrl,
-      submittedAt: nowIso,
-    });
+    // Lock filing to PAID.
+    await supabase
+      .from("filing_records")
+      .update({
+        status: "PAID",
+        locked_hash_sha256: sha256Hash,
+        filed_at: nowIso,
+      })
+      .eq("id", id);
 
     await logAuditEvent({
       action: "CHALLAN_LOCKED_AUDIT_PROOF",
@@ -65,14 +92,14 @@ export async function POST(
         challanNumber,
         utrNumber,
         sha256Hash,
-        amount: savedChallan.amount,
+        amount: savedChallan.amount_deposited,
       },
     });
 
     return NextResponse.json({
       success: true,
       data: {
-        challan: savedChallan,
+        challan: mapChallan(savedChallan),
         filingStatus: "PAID",
         auditLocked: true,
       },

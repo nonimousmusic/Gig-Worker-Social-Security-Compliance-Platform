@@ -1,13 +1,17 @@
 import { NextResponse } from "next/server";
-import { dataStore } from "@/lib/data-store";
+import { requireTenant, getWorkerRecords } from "@/lib/data-access";
 
 export async function GET() {
-  const workers = dataStore.getWorkers();
+  const tenant = await requireTenant();
+  if (!tenant) {
+    return NextResponse.json(
+      { success: false, error: { code: "UNAUTHORIZED", message: "Not authenticated" } },
+      { status: 401 }
+    );
+  }
 
-  // Tier distributions:
-  // Eligible: >= 90 days in 90-day window or >= 120 days in FY
-  // Approaching: 80 - 89 days in 90d window or 100 - 119 in FY
-  // Inactive: < 80 days
+  const workers = await getWorkerRecords(tenant);
+
   const breakdown = {
     eligible: workers.filter((w) => w.status === "ELIGIBLE"),
     approaching: workers.filter((w) => w.status === "APPROACHING"),
@@ -30,7 +34,7 @@ export async function GET() {
         aggregatorWorkerId: w.aggregatorWorkerId,
         fullName: w.fullName,
         maskedAadhaar: w.maskedAadhaar,
-        uan: w.uan || "Pending Linkage",
+        uan: w.uan || null,
         daysInLast90: w.daysInLast90,
         cumulativeDaysFY: w.cumulativeDaysFY,
         otherPlatformDays: w.otherPlatformDays,
@@ -40,7 +44,7 @@ export async function GET() {
         crossPlatformDeclared: w.crossPlatformDeclared,
         lastActiveDate: w.lastActiveDate,
       })),
-      statutoryRule: "Rule 28 — Engagement threshold of 90 days in rolling 12-month window or 120 cumulative days across aggregators",
+      statutoryRule: "Rule 28 — Engagement threshold of 90 days in the rolling 90-day window or 120 cumulative days across aggregators",
     },
   });
 }

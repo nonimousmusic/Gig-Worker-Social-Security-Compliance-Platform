@@ -18,16 +18,16 @@ The platform tracks worker registration on e-Shram, calculates day-count eligibi
 | Document | Description |
 |---|---|
 | [`prd.md`](./prd.md) | Product Requirements Document — goals, personas, user stories, functional requirements |
-| [`tech_spec_and_db_schema.md`](./tech_spec_and_db_schema.md) | Technical architecture, calculation engines, Prisma database schema |
+| [`tech_spec_and_db_schema.md`](./tech_spec_and_db_schema.md) | Technical architecture, calculation engines, SQL database schema |
 
 ### Full Documentation Suite (`docs/`)
 | Document | Description |
 |---|---|
 | [`docs/system_architecture.md`](./docs/system_architecture.md) | System Architecture & Implementation Reference — full codebase layout, core engines, and runtime flow |
-| [`docs/api_specification.md`](./docs/api_specification.md) | REST API specification — 40+ endpoints, request/response schemas, error codes |
-| [`docs/api_testing_guide.md`](./docs/api_testing_guide.md) | API Testing & Verification Guide — ready-to-run cURL & PowerShell commands for all 20 API endpoints |
+| [`docs/api_specification.md`](./docs/api_specification.md) | REST API specification — 19 endpoints, request/response schemas, error codes |
+| [`docs/api_testing_guide.md`](./docs/api_testing_guide.md) | API Testing & Verification Guide — ready-to-run cURL & PowerShell commands for all API endpoints |
 | [`docs/compliance_officer_guide.md`](./docs/compliance_officer_guide.md) | Compliance Officer Operational Manual — step-by-step SOPs for daily, quarterly, and annual obligations |
-| [`docs/operations_runbook.md`](./docs/operations_runbook.md) | Operations & Deployment Runbook — setup, Prisma commands, cron configuration, and troubleshooting |
+| [`docs/operations_runbook.md`](./docs/operations_runbook.md) | Operations & Deployment Runbook — setup, Supabase ops, cron configuration, and troubleshooting |
 | [`docs/user_flows.md`](./docs/user_flows.md) | User journey maps — 14 detailed flows with Mermaid diagrams for every persona |
 | [`docs/regulatory_reference.md`](./docs/regulatory_reference.md) | Legal compliance mapping — every statutory obligation mapped to platform features |
 | [`docs/environment_setup.md`](./docs/environment_setup.md) | Developer guide — prerequisites, repo structure, env vars, database setup, deployment |
@@ -47,29 +47,29 @@ The platform tracks worker registration on e-Shram, calculates day-count eligibi
 | Layer | Technology |
 |---|---|
 | Application Framework | Next.js (App Router) + TypeScript |
-| Database & ORM | PostgreSQL + Prisma ORM |
-| Styling & UI | TailwindCSS + Radix UI + Lucide Icons |
-| PDF Generation | Puppeteer (headless Chromium) |
-| Background Jobs | Lightweight cron (Vercel Cron / Node Cron) |
-| Email Alerts | Resend / AWS SES |
-| PII Encryption | AES-256-GCM (Node.js crypto) |
+| Database & Auth | Supabase (PostgreSQL + Auth + RLS) |
+| Styling & UI | TailwindCSS v4 + Lucide Icons (+ next/font) |
+| PDF Generation | None (live JSON dossier + browser print) |
+| Background Jobs | External scheduler → eligibility sync endpoint |
+| Email Alerts | None (in-app notification center) |
+| PII Encryption | Aadhaar masking only — phones stored plaintext (known gap) |
 
 ---
 
 ## Key Features
 
 ### P0 — MVP
-- **Worker Registration Tracker** — CSV/XLSX upload with automatic Aadhaar masking (DPDP compliant)
-- **90/120-Day Eligibility Engine** — Authoritative internal day count + self-reported cross-platform declarations
-- **Filing Wizard** — Pre-filled Form-XX/XXI PDF generation with challan upload and SHA-256 audit lock
-- **Deadline Alerting** — Daily cron sweep with 60/30/15/7/3/1-day email reminders and penalty forecasts
-- **Free Compliance Audit** — Gated lead-gen funnel with instant Risk Scorecard
-- **Multi-Tenant Partner Portal** — Delegated RBAC access for law firms managing multiple clients
+- **Worker Registration Tracker** — CSV upload with automatic Aadhaar masking (raw Aadhaar never stored)
+- **90/120-Day Eligibility Engine** — Authoritative day count + self-reported cross-platform declarations (promote-only; nightly full sync)
+- **Filing Wizard** — Form-XX quarterly drafts with challan upload and SHA-256 audit lock (PAID filings immutable)
+- **Deadline Alerting** — Live deadline cards from open filings + in-app notification center (no email dispatch)
+- **Free Compliance Audit** — Public estimator funnel with instant heuristic scorecard + lead capture
+- **Multi-Tenant Partner Portal** — Read-only multi-client console over `partner_client_access` grants
 
 ### P1 — Post-MVP
 - Contribution calculator with Section 114 rate config matrix
 - API/webhook sync for automated daily engagement ingestion
-- 75/85-day early warning threshold alerts
+- 75-day early warning threshold alerts
 
 ### P2 — Future
 - State-specific welfare board overlays (Rajasthan, Karnataka)
@@ -83,12 +83,10 @@ The platform tracks worker registration on e-Shram, calculates day-count eligibi
 ```
 Financial Year: 1 April — 31 March
 
-   April                    30 June               31 October              March
-     │                         │                      │                      │
-     FY Start               Form-XX Due            Form-XXI Due          FY End
-                          (Provisional)           (Final Return)
-                                
-Late penalty: 1% per month (12% p.a.) — Section 133 / Rule 49
+   Form-XX (quarterly): Q1→31 Jul, Q2→31 Oct, Q3→31 Jan, Q4→30 Apr
+   Form-XXI (annual): 30 June (end year)
+
+Late penalty: 1% per month simple (12% p.a.) — Section 133 / Rule 49
 Registration non-compliance: Up to ₹1,00,000 per worker — Section 133
 ```
 
@@ -99,18 +97,18 @@ Registration non-compliance: Up to ₹1,00,000 per worker — Section 133
 ```bash
 # 1. Clone
 git clone https://github.com/your-org/gig-cess-platform.git
-cd gig-cess-platform
+cd gig-cess-platform/app
 
 # 2. Install
 npm install
 
-# 3. Configure
+# 3. Configure (Supabase URL + anon key + service-role key)
 cp .env.example .env.local
-# Edit .env.local with your database URL, encryption key, etc.
 
-# 4. Database
-createdb gigcess_dev
-npx prisma migrate dev
+# 4. Database (Supabase SQL migrations + demo data + demo user)
+supabase db push
+supabase db seed
+npm run supabase:seed
 
 # 5. Run
 npm run dev
@@ -132,17 +130,16 @@ Browser (Aggregator / Advisor / Free Audit)
 │  Next.js Application Layer                          │
 │  Auth → Ingestion → Eligibility → Filing → Alerts  │
 └──────────────────────┬─────────────────────────────┘
-                       │ Prisma Client
+                       │ supabase-js (RLS-enforced)
                        ▼
               ┌─────────────────┐
-              │   PostgreSQL    │
-              │   (Encrypted)   │
+              │ Supabase        │
+              │ Postgres + Auth │
               └────────┬────────┘
                        │
-              Daily Cron (00:30 IST)
-              ├── Deadline alerts
-              ├── Penalty accrual
-              └── Threshold milestones
+              Nightly eligibility sync (scheduler → cron endpoint)
+              ├── Status reconciliation (promote + demote)
+              └── Per-org audit rows (no email, no penalty accrual)
 ```
 
 ---

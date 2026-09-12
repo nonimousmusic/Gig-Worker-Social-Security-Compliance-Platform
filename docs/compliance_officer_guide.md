@@ -7,7 +7,7 @@ This manual provides standard operating procedures (SOPs) for Aggregator Complia
 ## 1. Compliance Lifecycle Calendar
 
 ```
-    DAY 1-89               DAY 80-89                DAY 90+             QUARTER END (Oct 31)
+    DAY 1-74               DAY 75-89                DAY 90+             QUARTER END (Oct 31)
 ┌──────────────┐       ┌──────────────┐        ┌──────────────┐        ┌────────────────────┐
 │ Daily Trip   │ ────> │ Warning Zone │  ────> │ Statutory    │  ────> │ Form-XX Filing     │
 │ Logging via  │       │ Dispatched   │        │ Eligibility  │        │ & Challan Lock     │
@@ -37,16 +37,16 @@ This manual provides standard operating procedures (SOPs) for Aggregator Complia
 3. Verify that all Aadhaar numbers display strictly in masked format: `XXXX-XXXX-1234`.
 4. To register an individual new hire:
    - Click **Add Worker**.
-   - Input Aggregator Worker ID, Name, 12-digit Aadhaar, and e-Shram UAN.
-   - The client-side masking pipeline validates the Aadhaar checksum and retains only the last 4 digits in compliant storage.
+   - Input Aggregator Worker ID, Name, 12-digit Aadhaar, and e-Shram UAN (phone/state optional).
+   - The server validates the 12-digit format and persists only the masked `XXXX-XXXX-1234` form — raw Aadhaar is never stored (no checksum validation exists; format check only).
 
 ---
 
-### SOP 3: Monitoring 90-Day Rolling Window & 80-Day Warning Zone
+### SOP 3: Monitoring 90-Day Rolling Window & 75-Day Warning Zone
 1. Open **Statutory Eligibility Engine** (`/dashboard/eligibility`).
 2. Review the workforce distribution:
-   - **Statutory Eligible:** $\ge 90$ days in rolling 12 months OR $\ge 120$ cumulative days in FY.
-   - **Approaching Threshold (80–89 Days):** Immediate action required.
+   - **Statutory Eligible:** $\ge 90$ days in the rolling 90-day window (or best of rolling/FY internal) OR $\ge 120$ cumulative days in FY with declared external days.
+   - **Approaching Threshold (75–89 Days):** Immediate action required.
 3. For workers in the approaching zone:
    - Ensure the worker's e-Shram UAN is recorded.
    - Prompt the worker via SMS/WhatsApp to complete e-Shram registration before day 90 to prevent non-compliance penalties under Section 133.
@@ -55,14 +55,13 @@ This manual provides standard operating procedures (SOPs) for Aggregator Complia
 
 ### SOP 4: Processing Rule 28(2) Multi-App Worker Self-Declarations
 For gig partners driving or delivering on multiple platforms simultaneously (e.g. Zomato + Swiggy or Uber + Ola):
-1. Locate the worker in `/dashboard/eligibility` or `/dashboard/workers`.
-2. Click **+ Add Multi-App Days**.
-3. Select the other aggregator name (e.g. Zomato Logistics, Swiggy, Uber).
-4. Enter the declared active days and date range as certified by the gig partner.
-5. Click **Confirm & Aggregate**.
-6. The engine recalculates cumulative days:
+1. Locate the worker in `/dashboard/eligibility` (per-worker "Add Multi-App Days").
+2. Select the other aggregator from the fixed 5-option list (free text is not accepted).
+3. Enter the declared active days (≥ 0); optional period dates are echoed only, not stored.
+4. Click **Confirm & Aggregate**.
+5. The engine recalculates cumulative days:
    $$\text{New Cumulative Days} = \text{Internal Days} + \text{Declared External Days}$$
-   If $\ge 120$ days, the worker status flips automatically to `ELIGIBLE`.
+   If $\ge 120$ days (with external days $> 0$), the worker status promotes to `ELIGIBLE_MULTI_AGGREGATOR` (shown as Eligible). Updates are promote-only — a declaration never demotes a worker.
 
 ---
 
@@ -89,14 +88,15 @@ Statutory deadlines:
 3. Open **Challan Vault** (`/dashboard/challans`).
 4. Click **Deposit Challan & Lock**.
 5. Input:
-   - Target Filing Return (e.g. Form-XX Q2).
-   - Bank Challan Reference Number.
-   - Bank Name & Branch.
-   - Bank UTR Number.
-   - Amount Remitted (INR).
-   - Deposit Date.
+   - Target Filing Return (open, unpaid filings only — populated live).
+   - Bank Challan Reference Number (required).
+   - Bank UTR Number (required).
+   - Bank Name (optional, defaults to SBI Treasury Branch).
+   - Amount Remitted (optional, defaults to the filing liability).
+   - Deposit Date (optional, defaults to today).
+   - There are no branch/BSR/receipt-file fields, and no file is uploaded.
 6. Click **Verify & Lock Return**.
-7. The platform generates an immutable SHA-256 cryptographic hash and locks the filing status to `PAID`.
+7. The platform generates an immutable SHA-256 cryptographic hash and locks the filing status to `PAID` (further PATCHes return `409 FILING_LOCKED`).
 
 ---
 
